@@ -1,0 +1,7 @@
+' Todoister — silent launcher (no console window)
+' Edit "pythonw.exe" path if you use a venv; e.g. ".venv\Scripts\pythonw.exe"
+' Crash diagnostics → app.log
+Set sh = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+sh.CurrentDirectory = fso.GetParentFolderName(WScript.ScriptFullName)
+sh.Run "pythonw.exe app.py", 0, False

@@ -1,0 +1,455 @@
+/* ───── notebook view (embedded in Todoister) — nb- prefix + Todoister colors/sizes ───── */
+.nb-layout {
+  --nb-bg:#1e1e1e; --nb-card:#252525; --nb-line:#3a3a3a; --nb-side:#282828;
+  --nb-sel:#3d3d3d; --nb-hover:#363636;
+  --nb-txt:#e8e8e8; --nb-dim:#9a9a9a; --nb-gold:#e3a008; --nb-brand:#637760;
+  display:flex; height:100%; width:100%; overflow:hidden;
+  font-family:-apple-system,'Segoe UI','Noto Sans Georgian','BPG Nino Mtavruli',Roboto,sans-serif;
+  font-size:14px; color:var(--nb-txt); background:var(--nb-bg);
+}
+
+/* notes list */
+.nb-side { width:260px; flex:none; background:var(--nb-side); border-right:1px solid var(--nb-line);
+           display:flex; flex-direction:column; }
+/* "new page" = add-task style row (no card frame), plus in the app's brand colour */
+.nb-newbtn { margin:10px 12px 4px; padding:6px 8px; border-radius:7px;
+             background:none; border:none; color:var(--nb-dim);
+             font-family:inherit; font-size:14px; cursor:pointer; text-align:left;
+             display:flex; align-items:center; gap:8px; width:calc(100% - 24px); }
+.nb-newbtn:hover { color:var(--nb-txt); }
+.nb-plus { color:var(--nb-brand); font-size:18px; line-height:1; flex:none;
+           width:20px; height:20px; border-radius:50%;
+           display:inline-flex; align-items:center; justify-content:center;
+           transition:background .12s, color .12s; }
+.nb-newbtn:hover .nb-plus { background:var(--nb-brand); color:#fff; font-size:15px; }
+/* compact top toolbar: new note + new section as icons, each with a + badge */
+.nb-toptools { display:flex; align-items:center; gap:4px; padding:8px 10px 6px; }
+.nb-tool { position:relative; width:32px; height:30px; border-radius:7px; background:none; border:none;
+           cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.nb-tool.note { color:#7e9a7a; }
+.nb-tool.sec { color:var(--nb-dim); }
+.nb-tool:hover { background:var(--nb-hover); }
+.nb-tool > svg { width:18px; height:18px; }
+.nb-tool-badge { position:absolute; right:-1px; bottom:-1px; width:12px; height:12px; border-radius:50%;
+                 background:var(--nb-brand); color:#fff; display:inline-flex; align-items:center; justify-content:center;
+                 border:1.5px solid var(--nb-side); }
+.nb-tool-badge svg { width:8px; height:8px; }
+.nb-list { flex:1; overflow-y:auto; padding:4px 8px 10px; }
+/* each note = a framed "sheet" lifted off the sidebar background (thin border),
+   indented under its section header so the section reads as the parent */
+.nb-item { padding:4px 9px; border-radius:7px; cursor:pointer; margin:0 0 4px 6px;
+           background:var(--nb-card); border:1px solid var(--nb-line); }
+.nb-item:hover { background:var(--nb-hover); border-color:#4a4a4a; }
+.nb-item.sel { background:var(--nb-sel); border-color:#5a5a5a; }
+.nb-item-head { display:flex; align-items:flex-start; gap:6px; }
+.nb-dots { flex:none; background:none; border:none; color:var(--nb-dim); cursor:pointer;
+           font-size:18px; line-height:1; padding:0 2px; border-radius:5px; opacity:.45; }
+.nb-dots:hover { opacity:1; background:var(--nb-hover); color:var(--nb-txt); }
+.nb-dots.bar-dots { opacity:.8; font-size:20px; padding:4px 8px; }
+/* title — up to 2 lines */
+.nb-t-text { flex:1; min-width:0; font-size:12px; font-weight:600; line-height:1.3;
+             display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.nb-pdot { width:6px; height:6px; border-radius:50%; flex:none; margin-top:5px; }
+.nb-file-badge { flex:none; display:inline-flex; color:var(--nb-dim); opacity:.7; margin-top:2px; }
+.nb-file-badge svg { width:13px; height:13px; }
+/* body text — up to 3 lines */
+.nb-preview { font-size:11px; color:var(--nb-dim); line-height:1.35; margin-top:2px;
+              display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+/* bottom line: date + labels, overflow fades */
+.nb-metaline { display:flex; align-items:center; gap:5px; margin-top:4px; flex-wrap:nowrap; overflow:hidden;
+               -webkit-mask-image:linear-gradient(90deg,#000 86%,transparent);
+               mask-image:linear-gradient(90deg,#000 86%,transparent); }
+.nb-date { flex:none; font-size:10.5px; color:var(--nb-dim); white-space:nowrap; }
+.nb-chip { flex:none; white-space:nowrap; font-size:12px; padding:1px 7px; border-radius:9px; line-height:1.5;
+           background:#1e1e1e; color:var(--nb-dim); border:1px solid var(--nb-line); }
+.nb-side-msg { padding:14px 14px; color:var(--nb-dim); font-size:14px; }
+
+/* section groups — each section is a subtle background band (bounds start AND end) */
+.nb-group { background:#2c2c2c; border-radius:9px; padding:6px; margin-bottom:8px; }
+.nb-group.drop-over { background:rgba(227,160,8,.10); outline:1px dashed var(--nb-gold); outline-offset:-2px; }
+/* loose pages (no section): a faint band (lighter than a section) + same card width,
+   so they group subtly without looking like a section and stay the same size. */
+.nb-group-plain { background:#242424; padding:6px; border-radius:9px; margin-bottom:8px; }
+.nb-group-plain .nb-item { margin-left:6px; }
+.nb-group-plain.drop-over { background:rgba(227,160,8,.08); outline:none; }
+.nb-group-head { display:flex; align-items:center; gap:6px; padding:4px 4px; cursor:pointer;
+                 color:var(--nb-dim); font-size:12px; font-weight:700; user-select:none;
+                 letter-spacing:.3px; }
+.nb-group-head:hover { color:var(--nb-txt); }
+.nb-caret { font-size:10px; width:11px; flex:none; }
+.nb-group-ico { flex:none; display:inline-flex; color:var(--nb-dim); }
+.nb-group-ico svg { width:11px; height:11px; }
+.nb-group-title { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nb-group-count { color:var(--nb-dim); font-size:12px; }
+/* section "+" (add a page into this section) — brand colour, on header hover */
+.nb-group-head .nb-sec-add { background:none; border:none; color:var(--nb-brand);
+                             cursor:pointer; font-size:19px; line-height:1; padding:0 4px;
+                             border-radius:5px; opacity:0; flex:none; }
+.nb-group-head:hover .nb-sec-add { opacity:.95; }
+.nb-group-head .nb-sec-add:hover { opacity:1; background:var(--nb-hover); }
+/* section ⋯ — appears on header hover */
+.nb-group-head .nb-sec-dots { font-size:16px; padding:0 4px; margin-left:2px; opacity:0; }
+.nb-group-head:hover .nb-sec-dots { opacity:.6; }
+.nb-group-head .nb-sec-dots:hover { opacity:1; background:var(--nb-hover); color:var(--nb-txt); }
+.nb-sec-rename { flex:1; min-width:0; background:var(--nb-card); border:1px solid var(--nb-line);
+                 border-radius:5px; color:var(--nb-txt); font-family:inherit; font-size:12.5px;
+                 font-weight:700; letter-spacing:.3px; padding:2px 6px; outline:none; }
+.nb-item.dragging { opacity:.4; }
+/* compact, plain "+ New section" row aligned with the top "+ New note" (no box) */
+.nb-addsec { margin:2px 12px 10px; padding:6px 8px; border-radius:7px; background:none;
+             border:none; color:var(--nb-dim); font-family:inherit;
+             font-size:13px; cursor:pointer; text-align:left; width:calc(100% - 24px); }
+.nb-addsec:hover { color:var(--nb-txt); background:var(--nb-hover); }
+/* inline "add section" form (replaces window.prompt) */
+.nb-addsec-form { margin:4px 12px 14px; padding:9px 10px; border-radius:8px;
+                  background:var(--nb-card); border:1px solid var(--nb-line); width:calc(100% - 24px); }
+.nb-addsec-input { width:100%; box-sizing:border-box; background:transparent; border:none; outline:none;
+                   color:var(--nb-txt); font-family:inherit; font-size:14px; font-weight:600; padding:2px 2px 8px; }
+.nb-addsec-input::placeholder { color:var(--nb-dim); font-weight:400; }
+.nb-addsec-btns { display:flex; gap:6px; }
+.nb-addsec-go { background:#dc4c3e; color:#fff; border:none; border-radius:5px; padding:5px 12px;
+                font-family:inherit; font-size:13px; cursor:pointer; }
+.nb-addsec-go:disabled { opacity:.5; cursor:not-allowed; }
+.nb-addsec-cancel { background:var(--nb-hover); color:var(--nb-txt); border:none; border-radius:5px;
+                    padding:5px 12px; font-family:inherit; font-size:13px; cursor:pointer; }
+
+/* ⋯ menu */
+.nb-menu { position:fixed; z-index:9999; min-width:210px;
+           background:var(--nb-side); border:1px solid var(--nb-line); border-radius:10px;
+           box-shadow:0 12px 32px rgba(0,0,0,.55); padding:5px;
+           max-height:calc(100vh - 16px); overflow:hidden auto; }
+.nb-mi { display:flex; align-items:center; gap:9px; padding:9px 12px; border-radius:7px;
+         font-size:14px; color:var(--nb-txt); cursor:pointer; white-space:nowrap; }
+.nb-mi:hover { background:var(--nb-hover); }
+.nb-mi > svg { width:16px; height:16px; flex:none; }
+.nb-mi:not(.danger) > svg { color:var(--nb-dim); }
+.nb-mi.danger { color:#cf8d8d; }
+.nb-mi.danger:hover { background:var(--nb-hover); }
+.nb-mi.back { color:var(--nb-dim); font-size:13px; }
+.nb-menu-input { display:block; width:calc(100% - 10px); box-sizing:border-box; margin:2px 5px 3px;
+                 background:var(--nb-card); border:1px solid var(--nb-line); border-radius:6px;
+                 padding:7px 9px; color:var(--nb-txt); font-family:inherit; font-size:13.5px; outline:none; }
+.nb-menu-input:focus { border-color:var(--nb-brand); }
+.nb-mi.muted { color:var(--nb-dim); cursor:default; }
+.nb-mi.muted:hover { background:none; }
+.nb-arrow { margin-left:auto; color:var(--nb-dim); }
+.nb-color-row { display:flex; gap:8px; padding:8px 12px; flex-wrap:wrap; }
+.nb-swatch { width:22px; height:22px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0; }
+.nb-swatch:hover { border-color:var(--nb-dim); }
+.nb-swatch.on { border-color:#fff; }
+.nb-sep { height:1px; background:var(--nb-line); margin:4px 6px; }
+.nb-dot { width:11px; height:11px; border-radius:50%; flex:none; border:1px solid rgba(255,255,255,.15); }
+.nb-check { width:16px; flex:none; }
+
+/* main — editor */
+.nb-main { flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden;
+           background:var(--nb-card); }
+.nb-bar { padding:8px 16px; border-bottom:1px solid var(--nb-line);
+          display:flex; align-items:center; gap:4px; flex:none; min-height:50px; }
+.nb-tbtn { background:none; border:none; color:var(--nb-txt); cursor:pointer;
+           width:32px; height:32px; border-radius:7px; flex:none; opacity:0.4; transition:opacity .12s;
+           display:inline-flex; align-items:center; justify-content:center; }
+.nb-tbtn:hover { background:var(--nb-hover); opacity:1; }
+/* Active (bright) only while the note text is being edited; otherwise dim (the header
+   task pair is the active one). Clicking still works either way. */
+body.note-text-active .nb-tbtn { opacity:1; }
+/* divider + "Clear / Delete selected" button, set apart from undo/redo */
+.nb-bar-div { width:1px; height:18px; background:var(--nb-line); margin:0 6px; flex:none; }
+.nb-clearbtn { background:none; border:none; color:var(--nb-txt); cursor:pointer; height:32px;
+               padding:0 10px 0 8px; border-radius:7px; flex:none; opacity:0.5; font-size:13px;
+               font-family:inherit; display:inline-flex; align-items:center; gap:6px;
+               transition:opacity .12s, background .12s, color .12s; }
+.nb-clearbtn:hover { background:var(--nb-hover); opacity:1; }
+.nb-clearbtn.danger { color:#cf8d8d; opacity:0.85; }
+.nb-clearbtn.danger:hover { opacity:1; }
+.nb-title { font-size:16px; font-weight:600; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nb-bar-spacer { flex:1; }
+.nb-save { width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center;
+           border-radius:6px; flex:none; }
+.nb-save svg { width:18px; height:18px; }
+.nb-save.saved { color:var(--nb-brand); }          /* saved → the app green */
+.nb-save.saving { color:var(--nb-dim); }           /* saving → muted grey */
+.nb-save.saving svg { animation:nbspin .8s linear infinite; }
+@keyframes nbspin { to { transform:rotate(360deg); } }
+.nb-tool { display:inline-flex; align-items:center; gap:6px; background:none; border:1px solid transparent;
+           color:var(--nb-txt); font-family:inherit; font-size:13.5px; padding:6px 11px; border-radius:8px; cursor:pointer; }
+.nb-tool:hover { background:var(--nb-hover); }
+.nb-flag { font-size:14px; line-height:1; }
+.nb-editor-labels { display:flex; gap:5px; flex-wrap:wrap; padding:2px 44px 10px 56px; }
+
+/* comments / attachments (below the editor) */
+.nb-comments { padding:20px 44px 48px 56px; max-width:920px; }
+.nb-comments-head { font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
+                    color:var(--nb-dim); margin-bottom:8px; }
+.nb-comment { display:flex; align-items:flex-start; gap:8px; padding:9px 0; border-top:1px solid var(--nb-line); }
+.nb-comment:first-of-type { border-top:none; }
+.nb-comment-main { flex:1; min-width:0; }
+.nb-comment-text { font-size:13.5px; color:var(--nb-txt); line-height:1.5; white-space:pre-wrap;
+                   word-break:break-word; margin-bottom:6px; }
+.nb-comment-att { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.nb-comment-img { max-width:220px; max-height:170px; border-radius:8px; border:1px solid var(--nb-line); display:block; }
+.nb-comment-file { display:inline-flex; align-items:center; gap:5px; font-size:13px; color:var(--nb-txt);
+                   border:1px solid var(--nb-line); border-radius:7px; padding:5px 10px; text-decoration:none; }
+.nb-comment-file:hover { border-color:var(--nb-brand); color:var(--nb-brand); }
+.nb-comment-tag { font-size:11px; color:var(--nb-dim); border:1px solid var(--nb-line); border-radius:20px; padding:2px 9px; }
+.nb-comment-insert { font-size:12px; color:var(--nb-brand); background:none; border:1px solid var(--nb-line);
+                     border-radius:20px; padding:3px 11px; cursor:pointer; }
+.nb-comment-insert:hover { background:rgba(99,119,96,.16); border-color:var(--nb-brand); }
+.nb-comment-del { background:none; border:none; color:var(--nb-dim); font-size:18px; line-height:1; cursor:pointer;
+                  width:26px; height:26px; border-radius:6px; flex:none; opacity:0; transition:opacity .12s; }
+.nb-comment:hover .nb-comment-del { opacity:1; }
+.nb-comment-del:hover { color:#ff6b6b; background:#3a2326; }
+.nb-comment-addbtn { display:inline-flex; align-items:center; gap:7px; background:none; border:none;
+                     color:var(--nb-dim); font-family:inherit; font-size:13.5px; padding:9px 0; cursor:pointer; margin-top:4px; }
+.nb-comment-addbtn:hover { color:var(--nb-brand); }
+.nb-comment-addbtn:hover .nb-plus { background:var(--nb-brand); color:#fff; }
+.nb-comment-add { margin-top:10px; border:1px solid var(--nb-line); border-radius:10px; padding:10px; }
+.nb-comment-input { width:100%; background:none; border:none; outline:none; resize:vertical; color:var(--nb-txt);
+                    font-family:inherit; font-size:14px; line-height:1.5; }
+.nb-comment-draft { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--nb-dim);
+                    background:var(--nb-hover); border-radius:6px; padding:4px 8px; margin-top:6px; }
+.nb-comment-draft button { background:none; border:none; color:var(--nb-dim); cursor:pointer; font-size:14px; line-height:1; }
+.nb-comment-add-bar { display:flex; align-items:center; gap:6px; margin-top:8px; }
+.nb-comment-attach { display:inline-flex; align-items:center; gap:6px; background:none; border:1px solid var(--nb-line);
+                     color:var(--nb-txt); font-family:inherit; font-size:13px; padding:5px 10px; border-radius:7px; cursor:pointer; }
+.nb-comment-attach svg { width:15px; height:15px; }
+.nb-comment-attach:hover { background:var(--nb-hover); }
+.nb-comment-cancel { background:none; border:none; color:var(--nb-dim); font-family:inherit; font-size:13px; padding:5px 10px; cursor:pointer; }
+.nb-comment-cancel:hover { color:var(--nb-txt); }
+.nb-comment-send { background:var(--nb-brand); border:none; color:#fff; font-family:inherit; font-size:13px;
+                   padding:6px 14px; border-radius:7px; cursor:pointer; }
+.nb-comment-send:disabled { opacity:.45; cursor:default; }
+.nb-pop-backdrop { position:fixed; inset:0; z-index:9998; }
+
+/* markdown import box */
+.nb-md-modal { position:fixed; z-index:9999; top:50%; left:50%; transform:translate(-50%,-50%);
+               width:min(620px,90vw); background:var(--nb-side); border:1px solid var(--nb-line);
+               border-radius:12px; box-shadow:0 16px 48px rgba(0,0,0,.6); padding:16px; }
+.nb-md-title { font-size:14px; font-weight:600; color:var(--nb-txt); margin-bottom:10px; }
+.nb-md-textarea { width:100%; height:280px; resize:vertical; box-sizing:border-box; background:var(--nb-card);
+                  border:1px solid var(--nb-line); border-radius:8px; padding:10px 12px; color:var(--nb-txt);
+                  font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:13px; line-height:1.5; outline:none; }
+.nb-md-textarea:focus { border-color:var(--nb-brand); }
+.nb-md-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+
+/* files strip — only shown when the note has attachments; sits above the bottom bar */
+.nb-files { flex:none; border-top:1px solid var(--nb-line); background:var(--nb-card);
+            padding:8px 14px 10px; max-height:30vh; overflow-y:auto; }
+.nb-files-label { display:block; font-size:11px; font-weight:600; letter-spacing:.05em;
+                  text-transform:uppercase; color:var(--nb-dim); margin-bottom:7px; }
+.nb-files-row { display:flex; flex-wrap:wrap; gap:6px; }
+/* whole chip is one click target → opens the ⋯ menu (no browser-open on click) */
+.nb-file { display:inline-flex; align-items:center; gap:5px; max-width:190px; cursor:pointer;
+           color:var(--nb-dim); font-size:12px; line-height:1.6;
+           background:#1e1e1e; border:1px solid var(--nb-line); border-radius:9px; padding:1px 4px 1px 6px; }
+.nb-file:hover { background:#262626; border-color:#3a3a3a; }
+.nb-file-thumb { width:14px; height:14px; object-fit:cover; border-radius:3px; flex:none; }
+.nb-file-ico { width:14px; height:14px; flex:none; display:inline-flex; align-items:center; justify-content:center; color:var(--nb-dim); }
+.nb-file-ico svg { width:13px; height:13px; }
+.nb-file-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; min-width:0; }
+.nb-file-menu-ico { flex:none; display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; color:var(--nb-dim); }
+.nb-file-menu-ico svg { width:14px; height:14px; }
+.nb-file:hover .nb-file-menu-ico { color:var(--nb-txt); }
+.nb-file-menu { position:fixed; z-index:9999; min-width:162px; padding:4px; display:flex; flex-direction:column; gap:1px;
+                background:var(--bn-colors-menu-background,#252525); border:1px solid var(--nb-line);
+                border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.5); }
+.nb-file-menu button { display:flex; align-items:center; gap:9px; width:100%; text-align:left; background:none; border:none;
+                       color:var(--nb-txt); cursor:pointer; font-family:inherit; font-size:13px; padding:7px 10px; border-radius:6px; }
+.nb-file-menu button:hover { background:var(--bn-colors-hovered-background,#363636); }
+.nb-file-menu button svg { width:15px; height:15px; flex:none; opacity:.85; }
+.nb-file-menu button.danger { color:#cf8d8d; }
+.nb-file-menu button.danger:hover { background:var(--bn-colors-hovered-background,#363636); }
+.nb-embed-cap { margin-top:5px; font-size:13px; color:var(--nb-dim); text-align:center; line-height:1.4; word-break:break-word; }
+
+/* bottom bar (Keep style) */
+.nb-bottom { display:flex; align-items:center; gap:3px; padding:4px 14px; flex:none;
+             border-top:1px solid var(--nb-line); background:var(--nb-card); }
+.nb-bt { background:none; border:none; color:var(--nb-txt); cursor:pointer; font-size:15px;
+         width:30px; height:23px; border-radius:7px; display:inline-flex; align-items:center; justify-content:center; }
+.nb-bt svg { width:14px; height:14px; }
+.nb-bt:hover { background:var(--nb-hover); }
+.nb-bt.on { color:var(--nb-brand); background:rgba(99,119,96,.16); }
+.nb-bt.danger { color:#cf8d8d; }
+.nb-bt.danger:hover { background:var(--nb-hover); }
+.nb-bt-div { width:1px; align-self:stretch; background:var(--nb-line); margin:3px 5px; flex:none; }
+.nb-date-input { display:block; width:calc(100% - 24px); margin:4px 12px; padding:7px 10px; border-radius:7px;
+                 background:var(--nb-card); border:1px solid var(--nb-line); color:var(--nb-txt);
+                 font-family:inherit; font-size:13px; color-scheme:dark; }
+.nb-time-row { display:flex; align-items:center; gap:8px; margin:4px 12px; padding:4px 10px; border-radius:7px;
+               background:var(--nb-card); border:1px solid var(--nb-line); }
+.nb-time-ico { display:inline-flex; color:var(--nb-dim); flex:none; }
+.nb-time-ico svg { width:15px; height:15px; }
+.nb-time-input { flex:1; min-width:0; background:transparent; border:none; outline:none;
+                 color:var(--nb-txt); font-family:inherit; font-size:13px; color-scheme:dark; }
+.nb-time-clear { background:none; border:none; color:var(--nb-dim); cursor:pointer; font-size:15px;
+                 line-height:1; padding:0 4px; border-radius:5px; flex:none; }
+.nb-time-clear:hover { background:var(--nb-hover); color:var(--nb-txt); }
+.nb-btn { background:var(--nb-card); color:var(--nb-txt); border:1px solid var(--nb-line);
+          font-family:inherit; font-size:13.5px; padding:7px 13px; border-radius:8px; cursor:pointer; }
+.nb-btn:hover { background:var(--nb-hover); }
+.nb-btn.danger:hover { background:#3a2326; border-color:#ff6b6b; color:#ff6b6b; }
+.nb-editor-area { flex:1; min-width:0; overflow-y:auto; }
+.nb-empty { color:var(--nb-dim); text-align:center; margin-top:100px; font-size:16px; padding:0 40px; }
+
+/* online video embed (custom block) */
+.nb-embed-wrap { position:relative; max-width:680px; margin:8px 0; padding-top:24px; }
+.nb-embed { position:relative; border-radius:8px; overflow:hidden; background:#000; }
+.nb-embed iframe, .nb-embed video { display:block; width:100%; aspect-ratio:16/9; border:0; }
+/* PDF variant: a portrait document, so drop the 16:9 video ratio for a tall fixed box.
+   The iframe shows WebView2's built-in PDF viewer (scroll, zoom, print) inline. */
+.nb-embed-pdf { background:#525659; }
+.nb-embed-pdf iframe { aspect-ratio:auto; height:300px; }
+/* image variant: natural aspect, no black letterbox */
+.nb-embed[data-img] { background:transparent; }
+.nb-embed[data-img] img { display:block; width:100%; height:auto; user-select:none; }
+/* audio: a plain full-width player bar (no black media box) */
+.nb-embed-audio { width:100%; }
+.nb-embed-audio audio { display:block; width:100%; }
+/* file: a compact chip (icon + name); download lives in the Files strip, so the chip isn't a link */
+.nb-embed-file { display:inline-flex; align-items:center; gap:8px; max-width:100%; padding:9px 13px;
+                 background:var(--nb-card); border:1px solid var(--nb-line); border-radius:8px; color:var(--nb-txt); font-size:13px; }
+.nb-embed-file-ic { flex:none; display:inline-flex; color:var(--nb-dim); }
+.nb-embed-file-ic svg { width:18px; height:18px; }
+.nb-embed-file-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nb-embed-input { display:flex; align-items:center; gap:8px; margin:8px 0; padding:9px 11px; max-width:680px;
+                  background:var(--nb-card); border:1px solid var(--nb-line); border-radius:8px; color:var(--nb-dim); }
+.nb-embed-input svg { width:18px; height:18px; flex:none; }
+.nb-embed-input input { flex:1; min-width:0; background:#1e1e1e; border:1px solid var(--nb-line); border-radius:6px;
+                        color:var(--nb-txt); font-family:inherit; font-size:13px; padding:6px 9px; outline:none; }
+.nb-embed-input button { flex:none; background:var(--nb-brand); color:#fff; border:none; border-radius:6px;
+                         padding:6px 13px; font-family:inherit; font-size:13px; cursor:pointer; }
+.nb-embed-input .nb-embed-cancel { background:transparent; color:var(--nb-dim); border:1px solid var(--nb-line); }
+.nb-embed-input .nb-embed-cancel:hover { color:var(--nb-txt); }
+/* link-edit panel: styled with BlockNote's own theme vars so it matches the native Embed look */
+.nb-embed-edit-panel { display:flex; align-items:center; gap:8px; margin:8px 0; padding:8px; max-width:680px;
+  background:var(--bn-colors-menu-background,#252525); color:var(--bn-colors-menu-text,#e8e8e8);
+  border:var(--bn-border,1px solid rgba(255,255,255,.12)); border-radius:var(--bn-border-radius-medium,8px);
+  box-shadow:var(--bn-shadow-medium,0 4px 12px rgba(0,0,0,.35)); }
+.nb-embed-edit-panel svg { width:18px; height:18px; flex:none; opacity:.65; }
+.nb-embed-edit-panel input { flex:1; min-width:0; background:var(--bn-colors-editor-background,#1f1f1f);
+  color:var(--bn-colors-editor-text,#e8e8e8); border:var(--bn-border,1px solid rgba(255,255,255,.12));
+  border-radius:var(--bn-border-radius-small,5px); font-family:inherit; font-size:14px; padding:7px 10px; outline:none; }
+.nb-embed-edit-panel button { flex:none; border:none; border-radius:var(--bn-border-radius-small,5px);
+  padding:7px 14px; font-family:inherit; font-size:14px; cursor:pointer;
+  background:var(--bn-colors-selected-background,#3d3d3d); color:var(--bn-colors-selected-text,#e8e8e8); }
+.nb-embed-edit-panel button:hover { background:var(--bn-colors-hovered-background,#363636); }
+.nb-embed-edit-panel .nb-embed-cancel { background:transparent; color:var(--bn-colors-menu-text,#e8e8e8); opacity:.7; }
+.nb-embed-edit-panel .nb-embed-cancel:hover { opacity:1; background:var(--bn-colors-hovered-background,#363636); }
+.nb-embed-bad { display:flex; align-items:center; gap:8px; margin:8px 0; padding:9px 11px; max-width:680px;
+                background:var(--nb-card); border:1px solid var(--nb-line); border-radius:8px; color:var(--nb-dim); word-break:break-all; }
+.nb-embed-bad svg { width:18px; height:18px; flex:none; }
+.nb-embed-bad a { color:#7aa5f0; }
+/* resize handles (drag the side, like the original block) + change-link button, on hover */
+.nb-embed-rsz { position:absolute; top:50%; transform:translateY(-50%); width:8px; height:46px; max-height:55%;
+                border-radius:5px; background:rgba(0,0,0,.5); border:1.5px solid rgba(255,255,255,.92);
+                cursor:ew-resize; opacity:0; transition:opacity .12s; z-index:4; }
+.nb-embed-wrap:hover .nb-embed-rsz { opacity:1; }
+.nb-embed-rsz.l { left:5px; }
+.nb-embed-rsz.r { right:5px; }
+/* menu icon in the 24px strip ABOVE the video, on the FREE side (away from the wall the video is
+   aligned to). Shown on hover or while its bar is open; clicking it toggles the action bar. */
+.nb-embed-menu-btn { position:absolute; top:0; z-index:5; display:flex; align-items:center; justify-content:center;
+                     width:26px; height:22px; padding:0; border:none; border-radius:6px; background:var(--nb-card);
+                     color:var(--nb-dim); cursor:pointer; opacity:0; transition:opacity .12s; }
+.nb-embed-menu-btn[data-side="right"] { right:2px; }
+.nb-embed-menu-btn[data-side="left"] { left:2px; }
+.nb-embed-wrap:hover .nb-embed-menu-btn,
+.nb-embed-wrap[data-menu="1"] .nb-embed-menu-btn { opacity:1; }
+.nb-embed-menu-btn:hover { color:var(--nb-txt); }
+.nb-embed-menu-btn svg { width:16px; height:16px; }
+/* the action bar is a fixed popup anchored to the ⋯ icon (position computed in JS, clamped to the
+   viewport so it can never be clipped off an edge) */
+.nb-embed-bar { position:fixed; z-index:9999; display:flex; align-items:center; gap:2px; padding:3px;
+                background:var(--bn-colors-menu-background,#252525);
+                border:var(--bn-border,1px solid rgba(255,255,255,.12)); border-radius:8px;
+                box-shadow:var(--bn-shadow-medium,0 4px 14px rgba(0,0,0,.45)); }
+.nb-vbar-btn { display:flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0;
+               border:none; border-radius:6px; background:transparent; color:var(--bn-colors-menu-text,#e8e8e8); cursor:pointer; }
+.nb-vbar-btn:hover { background:var(--bn-colors-hovered-background,#363636); }
+.nb-vbar-btn.on { background:var(--bn-colors-selected-background,#3d3d3d); color:#fff; }
+.nb-vbar-btn svg { width:16px; height:16px; }
+.nb-vbar-sep { width:1px; height:18px; background:rgba(255,255,255,.14); margin:0 3px; flex:none; }
+.nb-vbar-del { color:#cf8d8d; }
+.nb-vbar-del:hover { background:var(--bn-colors-hovered-background,#363636); }
+.nb-embed-dragmask { position:fixed; inset:0; z-index:9998; cursor:ew-resize; }
+.nb-embed-edit-bad { margin-left:auto; flex:none; background:var(--nb-brand); color:#fff; border:none; border-radius:6px;
+                     padding:5px 11px; font-family:inherit; font-size:12px; cursor:pointer; }
+/* size-limit hint appended to every native upload block (localized via --nb-size-hint) */
+.bn-block-content[data-content-type="audio"] .bn-add-file-button-text::after,
+.bn-block-content[data-content-type="image"] .bn-add-file-button-text::after,
+.bn-block-content[data-content-type="video"] .bn-add-file-button-text::after,
+.bn-block-content[data-content-type="file"] .bn-add-file-button-text::after {
+  content: var(--nb-size-hint, " · max 5 MB"); opacity:.6; font-weight:400; }
+/* delete (×) on every empty native upload placeholder — handler hit-tests the right edge */
+.bn-block-content[data-content-type="audio"] .bn-add-file-button,
+.bn-block-content[data-content-type="image"] .bn-add-file-button,
+.bn-block-content[data-content-type="video"] .bn-add-file-button,
+.bn-block-content[data-content-type="file"] .bn-add-file-button { position:relative; }
+.bn-block-content[data-content-type="audio"] .bn-add-file-button::after,
+.bn-block-content[data-content-type="image"] .bn-add-file-button::after,
+.bn-block-content[data-content-type="video"] .bn-add-file-button::after,
+.bn-block-content[data-content-type="file"] .bn-add-file-button::after {
+  content:"×"; position:absolute; right:14px; top:50%; transform:translateY(-50%);
+  color:#e5534b; font-size:20px; line-height:1; font-weight:600; opacity:.85; pointer-events:none; }
+.bn-block-content[data-content-type="audio"] .bn-add-file-button:hover::after,
+.bn-block-content[data-content-type="image"] .bn-add-file-button:hover::after,
+.bn-block-content[data-content-type="video"] .bn-add-file-button:hover::after,
+.bn-block-content[data-content-type="file"] .bn-add-file-button:hover::after { opacity:1; }
+
+/* title — separate field (Notion style), not deletable */
+.nb-title-input {
+  display:block; width:100%; box-sizing:border-box;
+  background:transparent; border:none; outline:none;
+  color:var(--nb-txt); font-family:inherit; font-weight:700;
+  font-size:20px; line-height:1.3; padding:14px 44px 9px 56px;
+  border-bottom:1px solid var(--nb-line); margin-bottom:2px;
+}
+.nb-title-input::placeholder { color:var(--nb-dim); opacity:.55; }
+
+.nb-list::-webkit-scrollbar, .nb-editor-area::-webkit-scrollbar { width:10px; }
+.nb-list::-webkit-scrollbar-thumb, .nb-editor-area::-webkit-scrollbar-thumb { background:#3a3a3a; border-radius:5px; }
+
+/* ───── BlockNote: Todoister colors + Georgian font + full width ───── */
+.bn-container[data-color-scheme="dark"] {
+  --bn-colors-editor-background: #252525;
+  --bn-colors-editor-text: #e8e8e8;
+  --bn-colors-menu-background: #252525;
+  --bn-colors-menu-text: #e8e8e8;
+  --bn-colors-tooltip-background: #252525;
+  --bn-colors-hovered-background: #363636;
+  --bn-colors-selected-background: #3d3d3d;
+  --bn-colors-side-menu: #9a9a9a;
+  --bn-colors-highlights-gray-background: #2a2a2a;
+}
+.bn-container, .bn-editor, .bn-block-content,
+.bn-container .ProseMirror, .bn-inline-content {
+  font-family:-apple-system,'Segoe UI','Noto Sans Georgian','BPG Nino Mtavruli',Roboto,sans-serif !important;
+}
+/* stretch to full width (instead of the default narrow column) */
+/* Left padding holds BlockNote's block side menu (+ / drag handle) so it doesn't
+   spill past the editor's left edge; title + labels share the same left inset. */
+.bn-editor { max-width:none !important; width:100% !important;
+             font-size:14px; line-height:1.6; padding:6px 44px 60px 56px !important; }
+/* Heading sizing: force each heading to use its own --level size.
+   BlockNote's default sizes a heading that follows another heading via
+   --prev-level, which can resolve to nothing and collapse the heading down to
+   body text size. The heading element IS the .bn-block-content (an h1/h2/h3),
+   so target it directly and pin it to its own level. */
+.bn-block-content[data-content-type="heading"] { font-size:var(--level) !important; font-weight:700; }
+/* Code block: BlockNote pads the <pre> 24px on every side, so a 2-line snippet looks
+   huge. Tighten to a compact box that hugs its content. */
+.bn-block-content[data-content-type="codeBlock"] > pre { padding:12px 16px !important; }
+/* Inline code: BlockNote only swaps the font (no background), so `code` looks almost
+   like plain text. Give it a proper pill — tinted background, border, padding — so it
+   reads as code at a glance. Table cells render inline content as a bare <p> (no
+   .bn-inline-content wrapper), so the table block content type is matched too. */
+.bn-inline-content code,
+.bn-block-content[data-content-type="table"] code {
+  background:#2d2d2d; border:1px solid var(--nb-line); border-radius:5px;
+  padding:1px 5px; font-size:.88em; color:#e0a96d;
+}
+/* List items: the default 3px top/bottom on every block leaves a 6px gap between list
+   rows. Tighten list items so checkboxes / bullets / numbers sit closer together. */
+.bn-block-content[data-content-type="checkListItem"],
+.bn-block-content[data-content-type="bulletListItem"],
+.bn-block-content[data-content-type="numberedListItem"] { padding-top:1px; padding-bottom:1px; }

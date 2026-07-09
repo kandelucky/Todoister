@@ -1,0 +1,9 @@
+@echo off
+chcp 65001 >nul
+cd /d "%~dp0"
+title Todoister — Tasks
+REM Edit this line if you use a venv; e.g. ".venv\Scripts\python.exe app.py"
+python app.py
+echo.
+echo Server stopped. Press any key to close.
+pause >nul

@@ -1,0 +1,47 @@
+# Secrets
+.env
+
+# Local data (per-user Todoist DB + logs)
+*.db
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# PyInstaller / Inno Setup build output (generated, rebuilt each build)
+build/
+dist/
+installer/
+
+# Notebook (React) build deps — source is tracked, node_modules is not
+notebooks/app/node_modules/
+
+# User-specific launcher paths (use *.example as template)
+start.bat
+start.vbs
+
+# Archived demo/reference HTML + dead code (not part of the live app)
+_archive/
+
+# Scratch / WIP prototypes (tamagotchi companion, tests) — not part of the app
+buddy/
+dragon-*.html
+mascot-*
+pixel-*.html
+*-test.html
+spot-picker.html
+
+# Note exports (contain personal note content) + markdown test fixtures
+exports/
+sample-*.md
+
+# Megi-generated Georgian material (schemas, visuals, notes) — never shipped
+_megi/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

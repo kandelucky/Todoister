@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox — Todoist clone</title>
+<link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="notebook-assets/bundle.css">
+  <script src="i18n.js"></script>
+</head>
+<body>
+
+<!-- ============ SIDEBAR ============ -->
+<div id="app-sidebar-container">
+
+  <div class="sidebar-user-card">
+    <button class="user-btn" id="user-btn" onclick="openSyncPanel(event)" data-i18n-title="account.open" title="Account &amp; sync">
+      <span class="user-avatar" id="user-avatar"></span>
+      <span class="user-name" id="user-name">Me</span>
+      <span class="user-caret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+    </button>
+    <button class="hdr-icon-btn" onclick="location.reload()" data-i18n-title="action.reload" title="Reload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+    <button class="lang-toggle" id="lang-toggle" onclick="switchLang()" data-i18n-title="lang.toggle_title" title="Language"></button>
+  </div>
+  <div class="ctx-menu sync-panel" id="sync-panel"></div>
+
+  <button class="sidebar-add-task" onclick="quickAdd()">
+    <span class="plus-circle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
+    <span data-i18n="nav.add_task">Add task</span>
+  </button>
+
+  <ul id="top-sidebar-nav-items">
+    <li class="sidebar-nav-item" id="filter_search">
+      <button class="sidebar-nav-item-link" onclick="cmdkOpen()">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+        <span class="sidebar-nav-label" data-i18n="nav.search">Search</span>
+      </button>
+    </li>
+    <li class="sidebar-nav-item active" id="filter_inbox" data-view="inbox">
+      <button class="sidebar-nav-item-link" onclick="setView('inbox')">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>
+        <span class="sidebar-nav-label" data-i18n="nav.inbox">Inbox</span>
+        <span class="sidebar-nav-count" id="count-inbox"></span>
+      </button>
+    </li>
+    <li class="sidebar-nav-item" id="filter_today" data-view="today">
+      <button class="sidebar-nav-item-link" onclick="setView('today')">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+        <span class="sidebar-nav-label" data-i18n="nav.today">Today</span>
+        <span class="sidebar-nav-count" id="count-today"></span>
+      </button>
+    </li>
+    <li class="sidebar-nav-item" id="filter_upcoming" data-view="upcoming">
+      <button class="sidebar-nav-item-link" onclick="setView('upcoming')">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+        <span class="sidebar-nav-label" data-i18n="nav.upcoming">Upcoming</span>
+        <span class="sidebar-nav-count" id="count-upcoming"></span>
+      </button>
+    </li>
+    <li class="sidebar-nav-item" id="filter_calendar" data-view="calendar">
+      <button class="sidebar-nav-item-link" onclick="setView('calendar')">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg></span>
+        <span class="sidebar-nav-label" data-i18n="nav.calendar">Calendar</span>
+      </button>
+    </li>
+    <li class="sidebar-nav-item" id="filters_labels" data-view="filters">
+      <button class="sidebar-nav-item-link" onclick="setView('filters')">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg></span>
+        <span class="sidebar-nav-label" data-i18n="nav.filters_labels">Filters &amp; Labels</span>
+        <span class="sidebar-nav-count" id="count-help"></span>
+      </button>
+    </li>
+    <li class="sidebar-nav-item" id="filter_completed" data-view="completed">
+      <button class="sidebar-nav-item-link" onclick="setView('completed')">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
+        <span class="sidebar-nav-label" data-i18n="nav.reporting">Reporting</span>
+        <span class="sidebar-nav-count" id="count-completed"></span>
+      </button>
+    </li>
+  </ul>
+
+  <div class="sidebar-projects-header">
+    <span class="title" data-i18n="sidebar.my_projects" onclick="setView('projects-page')" title="My Projects">My Projects</span>
+    <span class="used" id="projects-used"></span>
+    <button class="proj-add-btn" onclick="openProjectDialog('add','')" data-i18n-title="proj.add_title" title="Add project"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+    <button onclick="toggleProjects()" id="projects-toggle">▾</button>
+  </div>
+  <ul id="projects_list"></ul>
+
+  <button class="sidebar-help" onclick="openHelpMenu(event)">
+    <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+    <span class="hlabel" data-i18n="help.resources">Help &amp; resources</span>
+  </button>
+
+</div>
+
+<!-- ============ MAIN ============ -->
+<div id="main-content">
+
+  <div id="large-header">
+    <div class="hdr-top">
+      <button class="hist-btn" id="undo-btn" onclick="doUndoMain()" data-i18n-title="undo.undo_btn" title="Undo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11"/></svg></button>
+      <button class="hist-btn" id="redo-btn" onclick="doRedoMain()" data-i18n-title="undo.redo_btn" title="Redo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5 5.5 5.5 0 0 0 9.5 20H13"/></svg></button>
+      <button class="refresh-btn" id="refresh-btn" onclick="manualRefresh()" data-i18n-title="tooltip.sync_now" title="Sync now (push + pull)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+      <span class="pending-pill" id="pending-pill" data-i18n-title="tooltip.pending" title="Unsent changes"></span>
+    </div>
+    <div class="hdr-main">
+      <div class="hdr-titlewrap">
+        <div id="view-breadcrumb" class="view-breadcrumb" style="display:none"></div>
+        <h1 id="view-title">Inbox</h1>
+      </div>
+      <div class="hdr-actions">
+        <span class="lc-switch" id="list-cal-switch">
+          <button data-lc="list" onclick="lcGoList()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg><span data-i18n="view_toggle.list">List</span></button>
+          <button data-lc="cal" onclick="lcGoCal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg><span data-i18n="nav.calendar">Calendar</span></button>
+        </span>
+        <button class="reschedule-btn" id="reschedule-btn" onclick="event.stopPropagation(); showRescheduleMenu()" data-i18n="ctx.reschedule" style="display:none">Reschedule</button>
+        <button class="display-btn" id="display-btn" onclick="toggleViewMode()" data-i18n-title="tooltip.board_list" title="Board / List"></button>
+        <button class="display-btn" id="fl-display-btn" onclick="openDisplayMenu(event)" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          <span data-i18n="disp.button">Display</span>
+        </button>
+        <button class="hdr-opts-btn" id="filter-opts-btn" onclick="openFilterOptsMenu(event)" data-i18n-title="fl.options" title="Filter options" style="display:none">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="project-board-view">
+    <div class="board-row" id="board-row">
+      <div class="empty-state" data-i18n="common.loading">Loading…</div>
+    </div>
+  </div>
+  <div id="notebook-view" style="display:none; flex:1; min-height:0; min-width:0;"><div id="notebook-root" style="height:100%; width:100%;"></div></div>
+
+  <div id="disconnected-screen" style="display:none;">
+    <div class="disc-card">
+      <span class="disc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-3.5 3.5a2.83 2.83 0 0 1-4-4L5 13"/><path d="M15 7l3.5-3.5a2.83 2.83 0 0 1 4 4L19 11"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="8" x2="5" y2="8"/><line x1="16" y1="19" x2="16" y2="22"/><line x1="19" y1="16" x2="22" y2="16"/></svg></span>
+      <div class="disc-title" data-i18n="disc.title">Not connected to Todoist</div>
+      <div class="disc-sub" data-i18n="disc.sub">Connect your Todoist account to load your tasks and projects.</div>
+      <button class="disc-btn" onclick="connectAccount()" data-i18n="account.connect">Connect Todoist</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============ MODAL ============ -->
+<div class="modal-backdrop" id="modal-backdrop" onclick="if(event.target===this) closeModal()">
+  <div class="modal" id="modal"></div>
+</div>
+
+<!-- ============ QUICK ADD (global, Todoist "Q") ============ -->
+<div class="qa-backdrop" id="qa-backdrop" onclick="if(event.target===this) cancelInlineAdd()">
+  <div class="qa-dialog" id="qa-dialog"></div>
+</div>
+
+<!-- ============ CONTEXT MENU ============ -->
+<div class="ctx-menu" id="ctx-menu"></div>
+<div class="ctx-submenu" id="ctx-submenu"></div>
+
+<!-- ============ PROJECT DIALOG ============ -->
+<div class="proj-dialog-backdrop" id="proj-dialog-backdrop" onclick="if(event.target===this) closeProjectDialog()">
+  <div class="proj-dialog" id="proj-dialog"></div>
+</div>
+
+<div class="proj-dialog-backdrop" id="confirm-backdrop" onclick="if(event.target===this) _resolveConfirm(false)">
+  <div class="proj-dialog" id="confirm-dialog"></div>
+</div>
+
+<!-- ============ GUIDE OVERLAY ============ -->
+<div class="guide-overlay" id="guide-overlay" onclick="if(event.target===this) closeGuide()">
+  <div class="guide-box">
+    <button class="guide-close" onclick="closeGuide()" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    <iframe id="guide-frame" title="Guide"></iframe>
+  </div>
+</div>
+
+<!-- ============ KEYBOARD SHORTCUTS ============ -->
+<div class="ks-overlay" id="ks-overlay" onclick="if(event.target===this) closeShortcuts()">
+  <div class="ks-box" role="dialog" aria-label="Keyboard Shortcuts">
+    <div class="ks-head">
+      <span class="ks-title" id="ks-title">Keyboard Shortcuts</span>
+      <span class="ks-close" onclick="closeShortcuts()" title="Close">×</span>
+    </div>
+    <div class="ks-body" id="ks-body"></div>
+  </div>
+</div>
+
+<!-- ============ LIGHTBOX ============ -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <button class="lightbox-close" onclick="event.stopPropagation(); closeLightbox()">×</button>
+  <img id="lightbox-img" src="" alt="">
+</div>
+
+<!-- ============ ADD REMINDER POPOVER ============ -->
+<div class="rem-pop" id="rem-pop"></div>
+
+<!-- ============ TOAST STACK ============ -->
+<div id="toast-stack"></div>
+
+<!-- ============ STICKY NOTES (corners, max 2) ============ -->
+<div id="sticky-layer"></div>
+
+<script src="js/01-core.js"></script>
+<script src="js/02-ui-controls.js"></script>
+<script src="js/03-render.js"></script>
+<script src="js/04-notebook.js"></script>
+<script src="js/05-calendar.js"></script>
+<script src="js/06-board-list.js"></script>
+<script src="js/07-modal.js"></script>
+<script src="js/08-dnd-add.js"></script>
+<script src="js/09-scheduler.js"></script>
+<script src="js/10-nav-actions.js"></script>
+<script src="js/11-projects.js"></script>
+<script src="js/12-reporting-palette.js"></script>
+<script src="js/13-poll.js"></script>
+<script src="notebook-assets/bundle.js"></script>
+</body>
+</html>

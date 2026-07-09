@@ -1,0 +1,23 @@
+{
+  "name": "megi-notebooks",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@blocknote/core": "^0.51.3",
+    "@blocknote/mantine": "^0.51.3",
+    "@blocknote/react": "^0.51.3",
+    "@floating-ui/react": "^0.27.19",
+    "markdown-it": "^14.2.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
+  }
+}

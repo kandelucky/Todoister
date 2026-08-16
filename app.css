@@ -1780,6 +1780,7 @@
   .kp-legend{font-size:12px; color:var(--text-3); padding:2px 6px 10px; line-height:1.5;} .kp-legend b{color:var(--text-2); margin-right:2px;}
   .kp-empty{padding:28px 20px; text-align:center; color:var(--text-3); font-size:13.5px; border:1px dashed var(--border); border-radius:8px; margin-top:8px; line-height:1.5;}
   .kp-off{padding:40px 20px; text-align:center; color:var(--text-3); font-size:13.5px; line-height:1.5;} .kp-off b{display:block; color:var(--text-2); font-size:15px; margin-bottom:6px; font-weight:600;}
+  .kp-wait{margin-top:14px; color:var(--text-2); font-size:13px;} .kp-wait::before{content:""; display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--p2); margin-right:8px; vertical-align:1px;}
   .kt-day{display:flex; align-items:center; gap:8px; margin:12px 0 4px 2px; font-size:13px; font-weight:600;}
   .kt-day.over{color:var(--p1);} .kt-day.today{color:var(--today);} .kt-day.pin{color:var(--cal-hi);} .kt-day .n{font-weight:normal; color:var(--text-3); font-size:12px;}
   /* card — identical on both tabs (Todoister density: 8×12, 14 px title, 12 px tags) */

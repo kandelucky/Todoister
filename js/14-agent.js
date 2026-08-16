@@ -19,6 +19,29 @@ let _agentWasBusy = false;
 // Per-card session state: id → {decided, verdict, kind:'accept'|'delete'|'split', action (undo/redo
 // object), prop (edited proposal), changes, comment, cmOpen, flag, snap (task snapshot for deleted)}
 const agentUI = {};
+/* ---- unsent drafts (comment text · flag) survive a restart — browser localStorage (Lasha's
+   decision 1). Nothing real lives here: the panel only marks tasks that already exist + sync. ---- */
+const AGENT_DRAFTS_KEY = "agent_drafts";
+function agentDraftsLoad(){
+  try {
+    const m = JSON.parse(localStorage.getItem(AGENT_DRAFTS_KEY) || "{}");
+    Object.keys(m).forEach(id => {
+      const d = m[id] || {}, cm = d.comment || "";
+      if(cm.trim() || d.flag) agentUI[id] = { tab:"triage", comment: cm, flag: !!d.flag, cmOpen: !!cm.trim() };
+    });
+  } catch(_){}
+}
+function agentDraftsSave(){
+  const m = {};
+  Object.keys(agentUI).forEach(id => {
+    const ui = agentUI[id], cm = (ui.comment || "").trim();
+    if(cm || ui.flag) m[id] = { comment: ui.comment || "", flag: !!ui.flag };
+  });
+  try {
+    if(Object.keys(m).length) localStorage.setItem(AGENT_DRAFTS_KEY, JSON.stringify(m));
+    else localStorage.removeItem(AGENT_DRAFTS_KEY);
+  } catch(_){}
+}
 
 /* ---- icons (Lucide-style, inline SVG — no text symbols anywhere on the panel) ---- */
 const AG_ICO = {
@@ -105,9 +128,11 @@ function agentRenderNav(){
     const n = agentPendingCount();
     badge.textContent = n ? String(n) : "";
   }
-  // agent answered → toast once (the panes re-render on their own)
-  if(_agentWasBusy && !agentInfo.busy && agentInfo.connected){
-    showToast(tr("agent.answer_arrived"), "ok", 4000);
+  // agent answered → toast once (the panes re-render on their own);
+  // agent vanished mid-processing → toast once, the batch keeps waiting in the DB
+  if(_agentWasBusy && !agentInfo.busy){
+    if(agentInfo.connected) showToast(tr("agent.answer_arrived"), "ok", 4000);
+    else showToast(tr("agent.connection_lost"), "", 6000);
   }
   _agentWasBusy = !!agentInfo.busy;
 }
@@ -186,10 +211,18 @@ function agentChanges(t){
 /* ---- view ---- */
 function renderAgentPanel(row){
   if(!agentInfo.connected && !agentInfo.busy){
-    row.innerHTML = `<div class="list-wrap kp-wrap"><div class="kp-off"><b>${esc(tr("agent.disabled_title"))}</b>${esc(tr("agent.disabled_body"))}</div></div>`;
+    // agent away: the panel is off; a batch already sent simply waits in the DB (decision 1)
+    const waiting = agentInfo.queued ? `<div class="kp-wait">${esc(tr("agent.queue_waiting", {n: agentInfo.queued}))}</div>` : "";
+    row.innerHTML = `<div class="list-wrap kp-wrap"><div class="kp-off"><b>${esc(tr("agent.disabled_title"))}</b>${esc(tr("agent.disabled_body"))}${waiting}</div></div>`;
     return;
   }
   const triage = agentTriageTasks();
+  // drafts left over from tasks that no longer carry a proposal (decided elsewhere) → drop
+  Object.keys(agentUI).forEach(id => {
+    const ui = agentUI[id];
+    if(!ui.decided && !ui.snap && !triage.some(t => t.id === id)){ delete agentUI[id]; }
+  });
+  agentDraftsSave();
   const nTri = triage.filter(t => !(agentUI[t.id] && agentUI[t.id].decided)).length;
   const items = agentItemsToSend();
   const n = items.active.length + items.triage.length;
@@ -276,12 +309,14 @@ function agentCmToggle(id){
 function agentCm(id, t){
   t.style.height = "auto"; t.style.height = t.scrollHeight + "px";
   const ui = agentUiFor(id); ui.comment = t.value; ui.cmOpen = true;
+  agentDraftsSave();
   agentRefreshFooter();
 }
 function agentFlag(id){
   const ui = agentUiFor(id); ui.flag = !ui.flag;
   const c = document.getElementById("kt-" + id); if(c) c.classList.toggle("flagged", ui.flag);
   const f = document.getElementById("fl-" + id); if(f) f.classList.toggle("on", ui.flag);
+  agentDraftsSave();
   agentRefreshFooter();
   agentRenderNav();
 }
@@ -519,10 +554,12 @@ async function agentSend(){
     agentSentN = (d && d.queued) || n;
     // sent cards leave the round: their status is now "queued" (server); drop the session marks
     items.triage.forEach(it => { delete agentUI[it.task_id]; });
+    agentDraftsSave();
     showToast(tr("agent.sent", {n: agentSentN}), "ok", 4000);
     render();
   } catch(_){ if(b) b.disabled = false; }
 }
 
+agentDraftsLoad();
 // deep link: #triage opens tab 2 (the view itself opens only when an agent is connected)
 if(location.hash === "#triage") agentTab = "triage";

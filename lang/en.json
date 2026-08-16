@@ -591,6 +591,8 @@
   "agent.processing": "Processing",
   "agent.processing_sub": "The agent received {n} · clear → updated here · unclear → it asks in chat",
   "agent.answer_arrived": "Answer arrived",
+  "agent.connection_lost": "Connection to the agent lost — what you sent waits in the queue",
+  "agent.queue_waiting": "Sent, waiting for the answer: {n}",
   "agent.disabled_title": "No agent connected — the panel is off",
   "agent.disabled_body": "This panel is a bridge to the agent. Its proposals appear here once it connects.",
   "agent.empty_triage": "No proposals. To analyse new Inbox captures — “Re-analyse”.",

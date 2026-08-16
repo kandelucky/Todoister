@@ -23,6 +23,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import sync as sync_mod
+import nb_files
 # Access via sync_mod.TOKEN so reload_token() takes effect at runtime
 import gcal
 import gcal_api
@@ -361,45 +362,9 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, metadata)
 
     def _todoist_upload(self, file_data, filename, ctype):
-        """Upload bytes to Todoist's /uploads endpoint, returning the file_attachment
-        metadata. Raises RuntimeError(code, msg) on failure."""
-        boundary = uuid.uuid4().hex
-        head = (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-            f"Content-Type: {ctype}\r\n\r\n"
-        ).encode("utf-8")
-        tail = f"\r\n--{boundary}--\r\n".encode("utf-8")
-        payload = head + file_data + tail
-
-        req = urllib.request.Request(
-            "https://api.todoist.com/api/v1/uploads/",
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {sync_mod.TOKEN}",
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=120) as r:
-                metadata = json.loads(r.read().decode("utf-8"))
-            log_action(f"[{now()}] upload OK: {filename} ({len(file_data)} bytes)")
-            return metadata
-        except urllib.error.HTTPError as e:
-            try:
-                err_body = e.read().decode("utf-8", errors="replace")[:300]
-            except Exception:
-                err_body = ""
-            log_action(f"[{now()}] upload HTTP {e.code}: {err_body}")
-            msg = f"Todoist HTTP {e.code}"
-            if e.code == 400 and len(file_data) > 5 * 1024 * 1024:
-                msg = "Todoist Free Tier: max 5 MB per file"
-            elif err_body:
-                msg = f"Todoist {e.code}: {err_body}"
-            raise RuntimeError(e.code, msg)
-        except Exception as e:
-            log_action(f"[{now()}] upload ERROR: {e}")
-            raise RuntimeError(502, str(e))
+        """Upload bytes to Todoist's /uploads endpoint → file_attachment metadata.
+        Raises RuntimeError(code, msg) on failure. Lives in nb_files.todoist_upload."""
+        return nb_files.todoist_upload(file_data, filename, ctype)
 
     def _handle_upload_url(self):
         """Fetch a remote image by URL server-side and upload it to Todoist, so a web image
@@ -1463,6 +1428,13 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute("UPDATE filters SET item_order=? WHERE id=?", (i + 1, fid))
             return True
 
+        if path == "/api/nb_flush":
+            # Page left / window closing: attach the JSON now instead of waiting out the idle timer.
+            # The upload runs outside this request's DB lock (own thread), so respond at once.
+            fid = body.get("id") or None
+            threading.Thread(target=nb_files.flush_due, args=(fid,), daemon=True).start()
+            return True
+
         if path == "/api/comment_add" and tid:
             text = (body.get("text") or "").strip()
             attachment = body.get("attachment")
@@ -1599,6 +1571,32 @@ class Handler(BaseHTTPRequestHandler):
             conn.execute("UPDATE tasks SET description=?, updated_at=? WHERE id=?", (value, ts, tid))
             queue_cmd(conn, "item_update", {"id": tid, "description": value}, coalesce_id=tid)
             log_action(f"[{now()}] {tid} «{short}» → description")
+        elif field == "nb_body":
+            # Notebook page body, dual storage: value = {"md": <Markdown>, "json": <BlockNote
+            # envelope>}. Markdown goes to the task description (Todoist renders it, editable on
+            # any device); the full document stays local in task_local.body_json (and later
+            # travels as an attached file). Todoist never sees the JSON in the description.
+            value = value if isinstance(value, dict) else {}
+            md = value.get("md") or ""
+            body_json = value.get("json") or ""
+            conn.execute("UPDATE tasks SET description=?, updated_at=? WHERE id=?", (md, ts, tid))
+            queue_cmd(conn, "item_update", {"id": tid, "description": md}, coalesce_id=tid)
+            conn.execute(
+                "INSERT INTO task_local(task_id, body_json) VALUES(?, ?) "
+                "ON CONFLICT(task_id) DO UPDATE SET body_json=excluded.body_json",
+                (tid, body_json),
+            )
+            nb_files.mark_dirty(conn, tid)
+            nb_files.schedule_flush()
+            log_action(f"[{now()}] {tid} «{short}» → notebook body (md {len(md)} ch, json {len(body_json)} ch)")
+        elif field == "nb_body_cache":
+            # Local cache only (envelope fetched back from the attached file on a fresh DB) —
+            # nothing changes on Todoist, no dirty flag.
+            conn.execute(
+                "INSERT INTO task_local(task_id, body_json) VALUES(?, ?) "
+                "ON CONFLICT(task_id) DO UPDATE SET body_json=excluded.body_json",
+                (tid, value or ""),
+            )
         elif field == "completed":
             conn.execute(
                 "UPDATE tasks SET checked=?, completed_at=?, updated_at=? WHERE id=?",

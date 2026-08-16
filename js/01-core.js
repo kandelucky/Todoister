@@ -207,6 +207,7 @@ function showToast(msg, type, ttlMs, action){
     el.classList.add("fade");
     setTimeout(() => el.remove(), 320);
   }, ttl);
+  return el;
 }
 function applySyncState(d){
   if(!d) return;
@@ -241,6 +242,7 @@ async function fetchState(){
     if(isOffline){ isOffline = false; }
     render();
     maybeNotebookFavCheck();
+    maybeMigrateNotebookPages();
   } catch(e){
     if(!isOffline){
       isOffline = true;

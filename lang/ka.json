@@ -505,6 +505,9 @@
   "nb.md_import_title": "markdown-ის ჩასმა",
   "nb.md_import_ph": "ჩასვი markdown ტექსტი აქ…",
   "nb.md_import_btn": "ჩასმა",
+  "nb.migrating": "ბლოკნოტის გვერდები გადადის ახალ ფორმატზე… {n}/{total}",
+  "nb.migrated": "ბლოკნოტის გვერდები გადავიდა: {n}. Todoist-ში ახლა ტექსტად ჩანს.",
+  "nb.migrated_partial": "ბლოკნოტის გვერდები გადავიდა: {n}, ვერ გადავიდა: {failed} — შემდეგ ჩართვაზე ხელახლა სცდის.",
 
   "onb.title": "Todoister — საწყისი მორგება",
   "onb.window_title": "Todoister — საწყისი მორგება",

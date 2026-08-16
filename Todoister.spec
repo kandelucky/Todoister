@@ -17,7 +17,7 @@ datas = [
     ('GUIDE.md', '.'),       # build_guide_page's last-resort fallback
 ]
 binaries = []
-hiddenimports = ['paths', 'server', 'sync', 'store', 'pages', 'gcal_sync', 'gcal', 'gcal_api']
+hiddenimports = ['paths', 'server', 'sync', 'store', 'pages', 'gcal_sync', 'gcal', 'gcal_api', 'nb_files']
 
 # pywebview + its .NET/WebView2 backend need their data + binaries collected.
 for pkg in ('webview', 'clr_loader'):

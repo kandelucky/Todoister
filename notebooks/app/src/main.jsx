@@ -4,7 +4,7 @@ import { useCreateBlockNote, SuggestionMenuController, GridSuggestionMenuControl
   createReactBlockSpec, getDefaultReactSlashMenuItems,
   FormattingToolbar, FormattingToolbarController, getFormattingToolbarItems,
   useBlockNoteEditor, useSelectedBlocks } from '@blocknote/react';
-import { BlockNoteSchema, defaultBlockSpecs, filterSuggestionItems,
+import { BlockNoteSchema, BlockNoteEditor, defaultBlockSpecs, filterSuggestionItems,
   getDefaultEmojiPickerItems } from '@blocknote/core';
 import { offset, flip, shift, size } from '@floating-ui/react';
 import { BlockNoteView } from '@blocknote/mantine';
@@ -128,17 +128,30 @@ function segmentMarkdown(text) {
   return units;
 }
 
+// Load path (description Markdown → page): the stored Markdown comes from our own serialiser
+// (one blank line = block separator) or from an edit made in Todoist. Reuses the paste parser;
+// tuning of blank-line handling lives in mdToBlocksForLoad below.
+async function mdToBlocksForLoad(editor, md) {
+  const blocks = await mdToBlocksPreservingBlanks(editor, toDisplayMd(md || ''), { separatorBlank: true });
+  return reconstructAttachments(blocks);
+}
+
 // Build blocks from Markdown while KEEPING blank lines. Plain blank run → that many empty
 // paragraph blocks. A pure "> " quote (every non-empty line starts with ">", no nested
 // block-level markdown) → one quote block whose empty ">" lines become "\n" hard breaks in
 // its inline content (BlockNote turns inline "\n" into a hardBreak), so the blanks sit INSIDE
 // the quote frame. Anything else → the normal markdown-it render (+ trimCodeBlocks/table aligns).
-async function mdToBlocksPreservingBlanks(editor, text) {
+async function mdToBlocksPreservingBlanks(editor, text, opts) {
+  // Load path: the Markdown is our own serialiser's output where 1 blank line = block
+  // separator and every EMPTY paragraph adds 2 more (measured: 1 empty → 3 blank lines,
+  // 2 → 5), so floor(n/2) restores the exact count; a hand edit with 2 blank lines → 1 gap.
+  const sepBlank = !!(opts && opts.separatorBlank);
   const units = segmentMarkdown(text);
   const out = [];
   for (const u of units) {
     if (u.kind === 'blank') {
-      for (let i = 0; i < u.n; i++) out.push({ type: 'paragraph', content: [] });
+      const n = sepBlank ? Math.floor(u.n / 2) : u.n;
+      for (let i = 0; i < n; i++) out.push({ type: 'paragraph', content: [] });
       continue;
     }
     const nonEmpty = u.lines.filter((l) => !BLANK_RE.test(l));
@@ -525,6 +538,67 @@ function toStorageMd(md) {
   });
 }
 const attProxy = (u) => '/api/attachment?u=' + encodeURIComponent(u);
+// A page created locally has a uuid until Todoist assigns its real id (real ids have no '-').
+const isTempId = (id) => typeof id === 'string' && id.includes('-');
+
+// ───────── dual storage: Markdown (Todoist) + JSON envelope (Todoister) ─────────
+// The task description carries plain Markdown so Todoist renders the page and it can be
+// edited on any device. The full BlockNote document (colours, table details, media props)
+// lives beside it as a JSON envelope {v, md_hash, blocks} — locally in task_local.body_json,
+// later also as an attached file. md_hash fingerprints the Markdown the envelope was made
+// from: on load, a matching hash means nobody edited the description elsewhere → use the
+// blocks; a mismatch means the Markdown is newer → rebuild from it (lossy) and drop the JSON.
+const NB_ENVELOPE_V = 1;
+// Todoist caps a description at 16 383 chars; keep a margin so item_update never fails.
+const NB_MD_LIMIT = 16000;
+function mdNorm(md) { return String(md || '').replace(/\r\n?/g, '\n').trim(); }
+function mdHash(md) {           // FNV-1a 32-bit over the normalised Markdown, hex
+  const s = mdNorm(md);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return ('0000000' + h.toString(16)).slice(-8);
+}
+function capMd(md) {
+  if (md.length <= NB_MD_LIMIT) return md;
+  return md.slice(0, NB_MD_LIMIT) + '\n\n…';
+}
+function makeEnvelope(blocks, md) { return JSON.stringify({ v: NB_ENVELOPE_V, md_hash: mdHash(md), blocks }); }
+function parseEnvelope(str) {
+  const raw = String(str || '').trim();
+  if (!raw.startsWith('{')) return null;
+  try {
+    const e = JSON.parse(raw);
+    if (e && Array.isArray(e.blocks) && typeof e.md_hash === 'string') return e;
+  } catch (err) {}
+  return null;
+}
+// Old format: the whole BlockNote document stored in the description as a JSON array.
+function parseLegacyJsonBody(str) {
+  const raw = String(str || '').trim();
+  if (!raw.startsWith('[')) return null;
+  try { const p = JSON.parse(raw); if (Array.isArray(p) && p.length) return p; } catch (err) {}
+  // Truncated by Todoist's 16 383-char description cap (the very reason for dual storage):
+  // salvage everything up to the last complete top-level block. Walk back to a '}' and try
+  // closing the array with 0–6 extra "}]" levels (children nest arrays inside objects).
+  if (raw.length >= 16000 && !raw.endsWith(']')) {
+    for (let k = raw.length - 1; k > 0 && k > raw.length - 4000; k--) {
+      if (raw[k] !== '}') continue;
+      const head = raw.slice(0, k + 1);
+      for (let lvl = 0; lvl <= 6; lvl++) {
+        try {
+          const p = JSON.parse(head + '}]'.repeat(lvl) + ']');
+          if (Array.isArray(p) && p.length) return p;
+        } catch (err) {}
+      }
+    }
+  }
+  return null;
+}
+// Editor document → the Markdown we store in the description (raw Todoist file URLs, capped).
+async function docToStorageMd(editor, blocks) {
+  const md = await editor.blocksToMarkdownLossy(mediaToNativeBlocks(blocks || editor.document));
+  return capMd(toStorageMd(md || ''));
+}
 const attIsImage = (a) => !!(a && (a.image || (a.file_type && a.file_type.startsWith('image/'))));
 // Which custom media block an uploaded attachment becomes, from its MIME type.
 function embedTypeForAtt(att) {
@@ -812,21 +886,22 @@ function NbFormattingToolbar() {
 }
 
 // ───────── Editor ─────────
-function Editor({ note, onChangeMd, onReady, onMediaRemoved }) {
+function Editor({ note, onChangeDoc, onReady, onMediaRemoved }) {
   const selfRef = useRef(null);   // this editor — used to drop a block whose upload failed
   // Parse our saved JSON body synchronously so it can seed the editor as initialContent.
   // Content set this way is NOT part of the undo history, so a single undo can't revert the
   // whole page-load back to empty (it only undoes the user's own edits since then). Legacy
   // markdown bodies have no sync form, so they still load asynchronously in the effect below.
   const initialContent = useMemo(() => {
-    const raw = (note.body || '').trim();
-    if (raw.startsWith('[')) {
-      try {
-        const p = JSON.parse(raw);
-        if (Array.isArray(p) && p.length) return p.every(isMediaBlock) ? [...p, { type: 'paragraph' }] : p;
-      } catch (e) {}
-    }
-    return undefined;
+    let p = null;
+    // 1) dual storage: local JSON envelope, valid only while its fingerprint matches the
+    //    Markdown in the description (otherwise the page was edited elsewhere → Markdown wins)
+    const env = parseEnvelope(note.body_json);
+    if (env && env.blocks.length && env.md_hash === mdHash(note.body)) p = env.blocks;
+    // 2) old format: the whole document as a JSON array in the description
+    if (!p) p = parseLegacyJsonBody(note.body);
+    if (p) return p.every(isMediaBlock) ? [...p, { type: 'paragraph' }] : p;
+    return undefined;   // 3) plain Markdown → parsed asynchronously in the effect below
   }, [note.id]);
   const editor = useCreateBlockNote({
     schema: nbSchema,
@@ -934,10 +1009,23 @@ function Editor({ note, onChangeMd, onReady, onMediaRemoved }) {
     let cancelled = false;
     (async () => {
       if (!initialContent) {
-        // Legacy markdown / edited on Todoist: no sync JSON, so parse and load here. (This
-        // replaceBlocks does enter the undo history, but these old notes are rare.)
-        const md = await editor.tryParseMarkdownToBlocks(toDisplayMd(note.body || ''));
-        let blocks = reconstructAttachments(md);
+        // No usable local JSON. First try the attached page file (fresh DB / other PC): valid
+        // only if its fingerprint matches the current Markdown, then cache it locally.
+        let blocks = null;
+        if (note.nb_file_url && !parseEnvelope(note.body_json) && window.NB && window.NB.fetchPageFile) {
+          const txt = await window.NB.fetchPageFile(note.nb_file_url);
+          const env = parseEnvelope(txt);
+          if (!cancelled && env && env.blocks.length && env.md_hash === mdHash(note.body)) {
+            blocks = env.blocks;
+            window.NB.cacheBody(note.id, txt).catch(() => {});
+          }
+        }
+        // Else: legacy markdown / edited on Todoist — parse the Markdown and load here. (This
+        // replaceBlocks does enter the undo history; acceptable for these cases.)
+        if (!blocks) {
+          try { blocks = await mdToBlocksForLoad(editor, note.body || ''); }
+          catch (e) { blocks = reconstructAttachments(await editor.tryParseMarkdownToBlocks(toDisplayMd(note.body || ''))); }
+        }
         if (!cancelled && blocks.length) {
           // Guarantee a text block to park in, so a media-only note still has a text
           // cursor target (otherwise the cursor falls onto the image → selected).
@@ -973,8 +1061,8 @@ function Editor({ note, onChangeMd, onReady, onMediaRemoved }) {
       if (removed.length) onMediaRemoved(removed);
     }
     prevMediaRef.current = now;
-    onChangeMd(JSON.stringify(editor.document));
-  }, [editor, onChangeMd, onMediaRemoved]);
+    onChangeDoc(editor);
+  }, [editor, onChangeDoc, onMediaRemoved]);
   // Replace BlockNote's built-in "/" menu (also opened by the side "+" button). Its default
   // size() middleware capped the menu to the space *below* the cursor against the whole
   // window, so near the bottom it shrank into a tiny scroll box and never flipped above —
@@ -1288,7 +1376,6 @@ function App() {
     const has = (arr, id) => arr.some((n) => n.id === id);
     // A freshly-created note opens on a LOCAL uuid (has hyphens); Todoist later assigns the real,
     // numeric id and the store swaps it. So a temp id == one we must follow through that remap.
-    const isTempId = (id) => typeof id === 'string' && id.includes('-');
     window.NB.subscribe((data) => {
       let cid = curIdRef.current;
       // Follow a temp→real id remap. In ONE sync the open uuid vanishes and the real id appears in
@@ -1343,6 +1430,14 @@ function App() {
   const cur = notes.find((n) => n.id === curId);
   const notesRef = useRef(notes); notesRef.current = notes;
   const curIdRef = useRef(curId); curIdRef.current = curId;
+  // Leaving a page (switch / close / window hide) → attach its JSON file now (server decides
+  // whether anything is dirty). Only real ids — a temp id has no Todoist task yet.
+  useEffect(() => {
+    const id = curId;
+    const leave = () => { if (id != null && !isTempId(id) && window.NB && window.NB.flushFile) window.NB.flushFile(id, true); };
+    window.addEventListener('pagehide', leave);
+    return () => { window.removeEventListener('pagehide', leave); leave(); };
+  }, [curId]);
 
   // ── image ⇄ attachment link ──
   // Page → attachment: when an inline image disappears from the body, delete its linked
@@ -1419,12 +1514,19 @@ function App() {
       }
     }, 600);
   }
-  const handleBody = useCallback((md) => {
+  // Body save (dual storage): after the typing pause, serialise once — Markdown for the
+  // description + JSON envelope for the local store — and send both in one request.
+  const handleBody = useCallback((ed) => {
     const id = curId;
-    setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, body: md } : n)));
     clearTimeout(bodyTimer.current); setSaving(true);
     bodyTimer.current = setTimeout(async () => {
-      try { await window.NB.saveBody(id, md); } catch (e) {} finally { setSaving(false); }
+      try {
+        const blocks = ed.document;
+        const md = await docToStorageMd(ed, blocks);
+        const json = makeEnvelope(blocks, md);
+        setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, body: md, body_json: json } : n)));
+        await window.NB.saveBody(id, md, json);
+      } catch (e) {} finally { setSaving(false); }
     }, 800);
   }, [curId]);
 
@@ -1814,7 +1916,7 @@ function App() {
               {cur.labels && cur.labels.length ? (
                 <div className="nb-editor-labels">{cur.labels.map((l) => <span key={l} className="nb-chip">{l}</span>)}</div>
               ) : null}
-              <Editor key={cur.id} note={cur} onChangeMd={handleBody} onReady={(ed) => { editorRef.current = ed; setHasSel(!selEmpty(ed)); try { ed.onSelectionChange && ed.onSelectionChange(() => setHasSel(!selEmpty(ed))); } catch (e) {} }} onMediaRemoved={onMediaRemoved} />
+              <Editor key={cur.id} note={cur} onChangeDoc={handleBody} onReady={(ed) => { editorRef.current = ed; setHasSel(!selEmpty(ed)); try { ed.onSelectionChange && ed.onSelectionChange(() => setHasSel(!selEmpty(ed))); } catch (e) {} }} onMediaRemoved={onMediaRemoved} />
             </div>
             <FilesStrip note={cur} onDel={onDelFile} onReplace={onReplaceFile} onDownload={onDownloadFile} />
             <div className="nb-bottom">
@@ -1868,6 +1970,17 @@ function App() {
     </div>
   );
 }
+
+// Headless conversions for the host (migration of unopened pages, tests): a detached
+// editor with our schema, never mounted. Same serialisers the live editor uses.
+let headlessEd = null;
+const headless = () => (headlessEd || (headlessEd = BlockNoteEditor.create({ schema: nbSchema })));
+window.NB_TOOLS = {
+  blocksToMd: (blocks) => docToStorageMd(headless(), blocks),
+  mdToBlocks: (md) => mdToBlocksForLoad(headless(), md),
+  envelope: (blocks, md) => makeEnvelope(blocks, md),
+  parseEnvelope, parseLegacyJsonBody, mdHash,
+};
 
 let mounted = false;
 window.mountNotebook = function (el) {

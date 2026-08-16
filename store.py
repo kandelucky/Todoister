@@ -26,6 +26,7 @@ PORT = 8765
 SYNC_INTERVAL = 30  # seconds between background sync rounds (shown in the sync panel)
 FILTER_SYNC_LIMIT = 3  # Todoist Free tier: max 3 filters mirrored to the account
 _lock = threading.Lock()
+NB_PAGE_FILE_NAME = "Todoister-page.json"   # mirrored in nb_files.NB_FILE_NAME (store must not import it)
 
 # Todoist avatar CDN (public images, no auth needed).
 AVATAR_CDN = "https://dcff1xvirvpfp.cloudfront.net"
@@ -134,6 +135,19 @@ def ensure_schema():
             conn.execute("ALTER TABLE task_local ADD COLUMN sticky INTEGER DEFAULT 0")
         except Exception:
             pass
+        # task_local.body_json — notebook page: full BlockNote document (JSON envelope
+        # {v, md_hash, blocks}); Todoist only gets the Markdown in tasks.description
+        try:
+            conn.execute("ALTER TABLE task_local ADD COLUMN body_json TEXT")
+        except Exception:
+            pass
+        # nb_file_* — the attached-file copy of body_json (nb_files.py): dirty flag + when the
+        # page was last saved (idle timer) + sha1 of the bytes last uploaded (skip no-op uploads)
+        for col in ("nb_file_dirty INTEGER DEFAULT 0", "nb_file_dirty_at TEXT", "nb_file_sha TEXT"):
+            try:
+                conn.execute(f"ALTER TABLE task_local ADD COLUMN {col}")
+            except Exception:
+                pass
         # task_local.gcal_event_id/gcal_sig — Google Calendar full sync (Stage B2):
         # the event this task maps to, and a signature of what we last pushed
         for col in ("gcal_event_id TEXT", "gcal_sig TEXT"):
@@ -251,7 +265,7 @@ def load_state_dict():
         } for f in filter_rows]
 
         task_rows = conn.execute(
-            "SELECT t.*, tl.interpretation, tl.review_status, tl.suggested_label, tl.pinned, tl.archived, tl.sticky "
+            "SELECT t.*, tl.interpretation, tl.review_status, tl.suggested_label, tl.pinned, tl.archived, tl.sticky, tl.body_json "
             "FROM tasks t "
             "LEFT JOIN task_local tl ON tl.task_id = t.id "
             "WHERE t.is_deleted=0 "
@@ -266,6 +280,7 @@ def load_state_dict():
 
         # Comments per task (only top-level tasks)
         comments_by_task = {}
+        nb_file_by_task = {}   # task_id → file_url of the hidden Todoister-page.json comment
         try:
             comm_rows = conn.execute(
                 "SELECT id, task_id, content, posted_at, file_attachment "
@@ -276,6 +291,12 @@ def load_state_dict():
                 if c["file_attachment"]:
                     try: att = json.loads(c["file_attachment"])
                     except Exception: att = None
+                # The notebook page-file comment (nb_files.py) is app-internal: hidden from the
+                # UI (no Files-strip chip, no delete), only its URL is exposed for cache misses.
+                if att and (att.get("file_name") or "") == NB_PAGE_FILE_NAME:
+                    if att.get("file_url"):
+                        nb_file_by_task[c["task_id"]] = att["file_url"]   # latest wins (ordered by posted_at)
+                    continue
                 comments_by_task.setdefault(c["task_id"], []).append({
                     "id": c["id"],
                     "content": c["content"] or "",
@@ -360,6 +381,8 @@ def load_state_dict():
                 "pinned": bool(r["pinned"]) if "pinned" in r.keys() else False,
                 "archived": bool(r["archived"]) if "archived" in r.keys() else False,
                 "sticky": bool(r["sticky"]) if "sticky" in r.keys() else False,
+                "body_json": (r["body_json"] or "") if "body_json" in r.keys() else "",
+                "nb_file_url": nb_file_by_task.get(r["id"], ""),
                 "comments": comments_by_task.get(r["id"], []),
                 "reminders": reminders_by_task.get(r["id"], []),
             })

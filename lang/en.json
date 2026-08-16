@@ -505,6 +505,9 @@
   "nb.md_import_title": "Paste Markdown",
   "nb.md_import_ph": "Paste Markdown text here…",
   "nb.md_import_btn": "Insert",
+  "nb.migrating": "Converting notebook pages to the new format… {n}/{total}",
+  "nb.migrated": "Notebook pages converted: {n}. Todoist now shows them as text.",
+  "nb.migrated_partial": "Notebook pages converted: {n}, failed: {failed} — will retry at next start.",
 
   "onb.title": "Todoister — initial setup",
   "onb.window_title": "Todoister — initial setup",

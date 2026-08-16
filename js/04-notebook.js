@@ -22,7 +22,7 @@ window.NB = {
   _cb: null,
   list(){
     return state.filter(t => t.project === "Notebook" && !t.completed)
-      .map(t => ({ id:t.id, title: t.text || "", body: t.description || "",
+      .map(t => ({ id:t.id, title: t.text || "", body: t.description || "", body_json: t.body_json || "", nb_file_url: t.nb_file_url || "",
                    section: t.section || "", priority: t.priority || "P4",
                    due_date: t.due_date || "", due_time: t.due_time || "",
                    pinned: isPinnedSection(t.section), archived: isArchiveSection(t.section),
@@ -171,8 +171,29 @@ window.NB = {
   async saveTitle(id, title){
     await post("/api/update", {id, field:"text", value: title || tr("common.untitled")});
   },
-  async saveBody(id, body){
-    await post("/api/update", {id, field:"description", value: body});
+  // Dual storage: md → task description (Todoist shows it), json → local task_local.body_json
+  // (+ attached as Todoister-page.json after the idle timer — nb_files.py).
+  async saveBody(id, md, json){
+    await post("/api/update", {id, field:"nb_body", value:{md: md || "", json: json || ""}});
+  },
+  // Local cache only: the envelope fetched back from the attached file (fresh DB / other PC).
+  async cacheBody(id, json){
+    await post("/api/update", {id, field:"nb_body_cache", value: json || ""});
+  },
+  // Page left / window closing → attach the JSON now instead of waiting out the idle timer.
+  flushFile(id, beacon){
+    const payload = JSON.stringify({id: id || null});
+    if(beacon && navigator.sendBeacon){ try { navigator.sendBeacon("/api/nb_flush", payload); return; } catch(e){} }
+    fetch("/api/nb_flush", {method:"POST", headers:{"Content-Type":"application/json"}, body: payload, keepalive:true}).catch(()=>{});
+  },
+  // Read the attached page file (JSON envelope) through the auth proxy; null if missing/invalid.
+  async fetchPageFile(url){
+    if(!url) return null;
+    try {
+      const r = await fetch("/api/attachment?u=" + encodeURIComponent(url));
+      if(!r.ok) return null;
+      return await r.text();
+    } catch(e){ return null; }
   },
   async create(section){
     const body = {text:"New page", project:"Notebook", description:""};
@@ -226,6 +247,38 @@ window.NB = {
   async duplicate(id){ await post("/api/task_duplicate", {id}); },
   async del(id){ await post("/api/task_delete", {id}); },
 };
+
+// ---- One-time migration of notebook pages to dual storage (2026-08-16) ----
+// Old format: the whole BlockNote document stored as a JSON array in the task description
+// (Todoist showed the page as a code blob). New: description = Markdown, JSON envelope local
+// (+ attached file via nb_files.py). Runs once per launch after the first state load; only
+// old-format pages are touched, so it is idempotent and resumable (interrupted → next launch).
+let _nbMigrationStarted = false;
+async function maybeMigrateNotebookPages(){
+  if(_nbMigrationStarted) return;
+  const T = window.NB_TOOLS;
+  if(!T || !window.NB) return;                    // bundle not ready yet → try on the next poll
+  const legacy = state.filter(t => t.project === "Notebook" && !t.completed && !!T.parseLegacyJsonBody(t.description || ""));
+  _nbMigrationStarted = true;                     // decided: either nothing to do or we run once
+  if(!legacy.length) return;
+  const total = legacy.length;
+  let done = 0, failed = 0;
+  const bar = showToast(tr("nb.migrating", {n: 0, total}), "", 600000);
+  const setMsg = m => { if(bar){ const b = bar.querySelector(".toast-body"); if(b) b.textContent = m; } };
+  for(const t of legacy){
+    try {
+      const blocks = T.parseLegacyJsonBody(t.description || "");
+      const md = await T.blocksToMd(blocks);
+      const json = T.envelope(blocks, md);
+      await window.NB.saveBody(t.id, md, json);
+      done++;
+    } catch(e){ failed++; console.warn("notebook migration failed for", t.id, e); }
+    setMsg(tr("nb.migrating", {n: done + failed, total}));
+  }
+  if(bar) bar.remove();
+  showToast(tr(failed ? "nb.migrated_partial" : "nb.migrated", {n: done, failed}), failed ? "error" : "", 8000);
+  if(window.NB.notify) window.NB.notify();
+}
 
 function renderContent(){
   const row = document.getElementById("board-row");

@@ -30,6 +30,7 @@ import webview
 from http.server import ThreadingHTTPServer
 
 from server import Handler, PORT, DB_PATH, now, ensure_schema, SYNC_INTERVAL, gcal_reconcile
+import nb_files
 from store import db as store_db, split_due
 import sync as sync_mod
 
@@ -362,7 +363,7 @@ def js_async(script):
     threading.Thread(target=_run, daemon=True).start()
 
 
-STICKY_VISIBLE = 2   # pinned rows shown in the tray menu — mirrors STICKY_VISIBLE in js/03-render.js
+STICKY_VISIBLE = 2   # pinned rows shown in the tray menu (the page shows as many cards as fit — js/03-render.js stickyFit)
 
 
 def sticky_tasks():
@@ -914,6 +915,11 @@ def background_sync_loop():
                 gcal_reconcile()
             except Exception as e:
                 print(f"[{now()}] bg-sync gcal error: {e}", flush=True)
+            # Notebook page files: retry uploads that failed (offline) / were left dirty
+            try:
+                nb_files.flush_due()
+            except Exception as e:
+                print(f"[{now()}] bg-sync nb-file error: {e}", flush=True)
         except Exception as e:
             print(f"[{now()}] bg-sync loop error: {e}", flush=True)
 

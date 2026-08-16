@@ -323,19 +323,40 @@
   .sticky-bang{position:absolute; left:-7px; top:-7px; width:20px; height:20px;
     background:#e3a008; color:#fff; border-radius:50%; font-weight:800; font-size:13px; line-height:1;
     display:flex; align-items:center; justify-content:center; box-shadow:0 1px 4px rgba(0,0,0,.4);}
-  .sticky-text{display:block; font-weight:600; cursor:pointer; word-wrap:break-word;
-    max-height:3.8em; overflow:hidden;}
+  .sticky-text{display:block; font-weight:600; cursor:pointer;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}   /* one line — full text on hover / in the modal */
   .sticky-check{position:absolute; left:11px; top:10px; width:18px; height:18px; flex:none;
     border-radius:50%; border:2px solid rgba(255,255,255,.7); background:none; color:#fff;
     cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0;}
   .sticky-check svg{width:12px; height:12px; opacity:0; transition:opacity .1s;}
   .sticky-check:hover{background:rgba(255,255,255,.12);}
   .sticky-check:hover svg{opacity:.85;}
-  .sticky-check.p1{border-color:#ffb0a8;} .sticky-check.p2{border-color:#f3c98a;} .sticky-check.p3{border-color:#aecbf0;}
+  /* priority = ring colour on the check circle (same palette as the task checkbox) */
+  .sticky-check.priority_1{border-color:var(--p1);} .sticky-check.priority_2{border-color:var(--p2);}
+  .sticky-check.priority_3{border-color:var(--p3);} .sticky-check.priority_4{border-color:rgba(255,255,255,.7);}
   .sticky-unpin{position:absolute; top:4px; right:6px; background:none; border:none;
     color:rgba(255,255,255,.55); cursor:pointer; font-size:16px; line-height:1; padding:2px 4px; border-radius:5px;}
   .sticky-unpin:hover{background:rgba(255,255,255,.14); color:#fff;}
   @keyframes toastIn{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);}}
+  /* "+N" queue card — same card style, sits next to the last visible note */
+  .sticky-note.sticky-more{width:auto; min-width:52px; padding:9px 14px; text-align:center;
+    font-weight:700; font-size:15px; cursor:pointer; user-select:none;}
+  .sticky-note.sticky-more:hover{background:#7e9a7a;}
+  /* queue popover — every pinned task in queue order */
+  .sticky-pop{min-width:320px; max-width:420px; padding:6px;}
+  .sticky-pop .ctx-head{padding:6px 10px 6px;}
+  .sticky-row{display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:6px; font-size:13px; color:var(--text);}
+  .sticky-row:hover{background:var(--hover);}
+  .sticky-row.shown{background:rgba(99,119,96,.22);}
+  .sticky-row.shown:hover{background:rgba(99,119,96,.34);}
+  .sticky-row .sticky-check{position:static; color:var(--text);}
+  .sticky-row .sticky-check.priority_4{border-color:var(--text-3);}
+  .sticky-row .sticky-check:hover{background:var(--hover);}
+  .sticky-row-text{flex:1; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .sticky-row-due{font-size:11px; color:var(--text-2); white-space:nowrap;}
+  .sticky-row-due.overdue{color:var(--p1);}
+  .sticky-row .sticky-unpin{position:static; color:var(--text-3);}
+  .sticky-row .sticky-unpin:hover{background:var(--hover); color:var(--text);}
   #large-header .search-wrap{flex:1; display:flex; justify-content:flex-end;}
   #large-header .search-input{
     width:240px; max-width:100%; background:var(--card);
@@ -593,8 +614,10 @@
   }
   .board-section-header .spacer{flex:1;}
   .board-section-header .menu-btn{
-    color:var(--text-2); padding:2px 6px;
+    color:var(--text-2); padding:0; width:26px; height:26px; border-radius:6px;
+    display:inline-flex; align-items:center; justify-content:center;
   }
+  .board-section-header .menu-btn svg{width:14px; height:14px; display:block;}
   .board-section-header .menu-btn:hover{background:var(--hover);}
 
   /* Task list sizes to its cards (grow:0) and only scrolls when the column runs out
@@ -625,6 +648,21 @@
   .task_checkbox.priority_4{border-color:var(--p4);}
 
   .task-title-container{flex:1; min-width:0;}
+  /* card ⋯ button — real hit area (28×28) without changing the card layout (negative margins) */
+  .board_task .menu-btn{flex:none; display:inline-flex; align-items:center; justify-content:center;
+    width:28px; height:28px; margin:-5px -8px -5px 0; padding:0; border-radius:6px;
+    font-size:16px; line-height:1; color:var(--text-2); background:none; border:none; cursor:pointer;}
+  .board_task .menu-btn svg{width:14px; height:14px; display:block;}   /* Lucide ellipsis — the ⋯ text glyph sat off-centre */
+  .board_task .menu-btn:hover{background:var(--hover); color:var(--text);}
+  /* pinned (sticky) marker — next to the ⋯ button, sticky-note green; click = unpin (hover shows pin-off) */
+  .task-pin{flex:none; display:inline-flex; align-items:center; justify-content:center;
+    width:28px; height:28px; margin:-5px -4px -5px 0; padding:0; border-radius:6px;
+    color:#8fae8a; background:none; border:none; cursor:pointer;}
+  .task-pin svg{width:15px; height:15px; display:block;}
+  .task-pin .off{display:none;}
+  .task-pin:hover{background:var(--hover); color:var(--accent);}
+  .task-pin:hover .on{display:none;} .task-pin:hover .off{display:inline-flex;}
+  .modal-head .mh-pin{width:30px; height:30px; margin:0;}
   .task_content{font-size:14px; line-height:1.4;}
   .task_description{font-size:13px; color:var(--text-2); margin-top:2px;}
 
@@ -696,9 +734,11 @@
   .list-sec-head .count{color:var(--text-3); font-size:13px;}
   .list-sec-head .spacer{flex:1;}
   .list-sec-head .menu-btn{
-    color:var(--text-2); padding:2px 6px;
+    color:var(--text-2); padding:0; width:26px; height:26px; border-radius:6px;
+    display:inline-flex; align-items:center; justify-content:center;
     opacity:0; transition:opacity 0.15s;
   }
+  .list-sec-head .menu-btn svg{width:14px; height:14px; display:block;}
   .list-sec-head:hover .menu-btn{opacity:1;}
   .list-sec-head .menu-btn:hover{background:var(--hover); color:var(--text);}
   .plus_add_button.list-add{

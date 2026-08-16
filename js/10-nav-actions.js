@@ -354,6 +354,9 @@ function openTaskCtxMenu(ev, id, fromModal){
   const m = document.getElementById("ctx-menu");
 
   let items = "";
+  // sticky note first — pin / unpin with distinct icons (Lasha 2026-08-16)
+  items += `<div class="ctx-mi" onclick="toggleSticky('${id}'); closeCtx()"><span class="ctx-ico">${t.sticky ? SVG.pinOff : SVG.pin}</span><span class="label">${t.sticky ? tr("sticky.unmake") : tr("sticky.make")}</span></div>`;
+  items += `<div class="ctx-sep"></div>`;
   if(!fromModal){
     items += `<div class="ctx-mi" onclick="addAdjacent('${id}','above'); closeCtx()"><span class="ctx-ico">${SVG.arrowUp}</span><span class="label">${tr("ctx.add_above")}</span></div>`;
     items += `<div class="ctx-mi" onclick="addAdjacent('${id}','below'); closeCtx()"><span class="ctx-ico">${SVG.arrowDown}</span><span class="label">${tr("ctx.add_below")}</span></div>`;
@@ -378,8 +381,6 @@ function openTaskCtxMenu(ev, id, fromModal){
   items += `<div class="ctx-sep"></div>`;
   items += `<div class="ctx-mi" onclick="openMoveSubmenu(event,'${id}')"><span class="ctx-ico">${SVG.moveRight}</span><span class="label">${tr("ctx.move_to")}</span><span class="kbd">V</span></div>`;
   items += `<div class="ctx-mi" onclick="duplicateTask('${id}'); closeCtx()"><span class="ctx-ico">${SVG.copy}</span><span class="label">${tr("ctx.duplicate")}</span></div>`;
-  items += `<div class="ctx-sep"></div>`;
-  items += `<div class="ctx-mi" onclick="toggleSticky('${id}'); closeCtx()"><span class="ctx-ico">${SVG.pin}</span><span class="label">${t.sticky ? tr("sticky.unmake") : tr("sticky.make")}</span></div>`;
   items += `<div class="ctx-sep"></div>`;
   items += `<div class="ctx-mi del" onclick="deleteTask('${id}'); closeCtx()"><span class="ctx-ico">${SVG.trash}</span><span class="label">${tr("common.delete")}</span></div>`;
 

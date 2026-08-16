@@ -36,18 +36,34 @@ function render(){
   if(modalTaskId) renderModal();
 }
 
-/* ============ STICKY NOTES (super-priority, corners, max 2) ============ */
-const STICKY_MAX = 2;
+/* ============ STICKY NOTES (super-priority, top-right queue) ============ */
+// Up to STICKY_MAX tasks can be pinned; STICKY_VISIBLE cards are shown, the rest
+// wait in a queue behind a "+N" card (click → popover with the whole queue).
+// Complete / delete / unpin → the next queued task surfaces automatically.
+const STICKY_MAX = 10;
+const STICKY_VISIBLE = 2;
 let _stickySig = "";   // last rendered signature — skip rebuild when unchanged (avoids sync flicker)
-function stickyTasks(){ return state.filter(t => t.sticky && !t.completed); }
+const _PRIO_RANK = {P1:1, P2:2, P3:3, P4:4};
+// Queue order: soonest due first (no due → last) → higher priority → text A→Z.
+function stickyOrder(a, b){
+  const da = a.due_date ? a.due_date + "T" + (a.due_time || "99:99") : "9999";
+  const db = b.due_date ? b.due_date + "T" + (b.due_time || "99:99") : "9999";
+  if(da !== db) return da < db ? -1 : 1;
+  const pa = _PRIO_RANK[a.priority] || 4, pb = _PRIO_RANK[b.priority] || 4;
+  if(pa !== pb) return pa - pb;
+  return (a.text || "").localeCompare(b.text || "", undefined, {sensitivity:"base"});
+}
+function stickyTasks(){ return state.filter(t => t.sticky && !t.completed).sort(stickyOrder); }
 function renderStickies(){
   const layer = document.getElementById("sticky-layer");
   if(!layer) return;
-  if(!connected){ if(_stickySig !== ""){ layer.innerHTML = ""; _stickySig = ""; } return; }
-  const list = stickyTasks().slice(0, STICKY_MAX);
+  if(!connected){ if(_stickySig !== ""){ layer.innerHTML = ""; _stickySig = ""; closeStickyPopover(); } return; }
+  const all = stickyTasks();
+  const list = all.slice(0, STICKY_VISIBLE);
+  const more = all.length - list.length;
   // Only touch the DOM when the visible set actually changes. render() runs on every
   // sync poll; without this guard the cards would be recreated each time and flicker.
-  const sig = list.map(t => t.id + "|" + (t.priority||"") + "|" + (t.text||"")).join("§");
+  const sig = all.map(t => t.id + "|" + (t.priority||"") + "|" + (t.text||"") + "|" + (t.due_date||"") + (t.due_time||"")).join("§");
   if(sig === _stickySig) return;
   _stickySig = sig;
   layer.innerHTML = list.map((t) => {
@@ -55,10 +71,13 @@ function renderStickies(){
     return `<div class="sticky-note">
       <span class="sticky-bang">!</span>
       <button class="sticky-check ${pc}" onclick="completeTask('${t.id}')" title="${esc(tr('sticky.complete'))}">${SVG.check}</button>
-      <span class="sticky-text" onclick="openModal('${t.id}')">${esc(t.text)}</span>
+      <span class="sticky-text" onclick="openModal('${t.id}')" title="${esc(t.text)}">${esc(t.text)}</span>
       <button class="sticky-unpin" onclick="toggleSticky('${t.id}')" title="${esc(tr('sticky.unmake'))}">×</button>
     </div>`;
-  }).join("");
+  }).join("") + (more > 0
+    ? `<div class="sticky-note sticky-more" id="sticky-more" onclick="openStickyPopover(event)" title="${esc(tr('sticky.queue'))}">+${more}</div>`
+    : "");
+  if(more <= 0) closeStickyPopover(); else if(_stickyPopOpen) renderStickyPopover();
 }
 function toggleSticky(id){
   const t = T(id); if(!t) return;
@@ -68,6 +87,57 @@ function toggleSticky(id){
   }
   upd(id, "sticky", !t.sticky);
 }
+/* --- queue popover: every pinned task in queue order --- */
+let _stickyPopOpen = false;
+function _stickyPopEl(){
+  let el = document.getElementById("sticky-pop");
+  if(!el){
+    el = document.createElement("div");
+    el.id = "sticky-pop";
+    el.className = "ctx-menu sticky-pop";
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function renderStickyPopover(){
+  const el = _stickyPopEl();
+  const all = stickyTasks();
+  el.innerHTML = `<div class="ctx-head">${esc(tr("sticky.queue"))} · ${all.length}/${STICKY_MAX}</div>` +
+    all.map((t, i) => {
+      const pc = PCLS[t.priority] || "";
+      return `<div class="sticky-row${i < STICKY_VISIBLE ? " shown" : ""}">
+        <button class="sticky-check ${pc}" onclick="completeTask('${t.id}')" title="${esc(tr('sticky.complete'))}">${SVG.check}</button>
+        <span class="sticky-row-text" onclick="openModal('${t.id}'); closeStickyPopover()">${esc(t.text)}</span>
+        ${t.due_date ? `<span class="sticky-row-due${isOverdue(t.due_date) ? " overdue" : ""}">${esc(fmtDate(t.due_date))}${t.due_time ? " " + esc(t.due_time) : ""}</span>` : ""}
+        <button class="sticky-unpin" onclick="toggleSticky('${t.id}')" title="${esc(tr('sticky.unmake'))}">×</button>
+      </div>`;
+    }).join("");
+}
+function openStickyPopover(ev){
+  if(ev) ev.stopPropagation();
+  if(!stickyTasks().length) return;
+  const el = _stickyPopEl();
+  renderStickyPopover();
+  el.classList.add("show");
+  _stickyPopOpen = true;
+  // anchor under the "+N" card (or the sticky layer when opened from the tray)
+  const anchor = document.getElementById("sticky-more") || document.querySelector("#sticky-layer .sticky-note") || document.getElementById("sticky-layer");
+  const r = anchor.getBoundingClientRect();
+  const w = el.offsetWidth || 320;
+  el.style.top = Math.min(r.bottom + 8, window.innerHeight - el.offsetHeight - 8) + "px";
+  el.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + "px";
+}
+function closeStickyPopover(){
+  const el = document.getElementById("sticky-pop");
+  if(el) el.classList.remove("show");
+  _stickyPopOpen = false;
+}
+document.addEventListener("click", e => {
+  if(_stickyPopOpen && !e.target.closest("#sticky-pop") && !e.target.closest("#sticky-more")) closeStickyPopover();
+});
+document.addEventListener("keydown", e => {
+  if(e.key === "Escape" && _stickyPopOpen){ closeStickyPopover(); e.stopImmediatePropagation(); }
+}, true);
 
 function renderSidebar(){
   document.getElementById("count-inbox").textContent = projectCount("Inbox") || "";

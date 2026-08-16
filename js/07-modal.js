@@ -50,6 +50,7 @@ function renderModal(){
       <span class="spacer"></span>
       <button class="mh-btn" onclick="navTask(-1)" title="${esc(tr('modal.prev_task'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
       <button class="mh-btn" onclick="navTask(1)" title="${esc(tr('modal.next_task'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+      ${t.sticky ? `<button class="task-pin mh-pin" onclick="toggleSticky('${t.id}')" title="${esc(tr('sticky.unmake'))}"><span class="on">${SVG.pin}</span><span class="off">${SVG.pinOff}</span></button>` : ""}
       <button class="mh-btn" onclick="openTaskCtxMenu(event,'${t.id}', true)" title="${esc(tr('modal.more_actions'))}"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
       <button class="mh-btn" onclick="closeModal()" title="${esc(tr('common.close'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>

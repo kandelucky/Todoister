@@ -62,11 +62,30 @@ def md_to_html(md):
             out.append("<table><thead><tr>%s</tr></thead><tbody>%s</tbody></table>" % (th, trs))
             continue
         if re.match(r"^\s*[-*]\s+", line):
-            items = []
-            while i < n and re.match(r"^\s*[-*]\s+", lines[i]):
-                items.append("<li>" + inline(re.sub(r"^\s*[-*]\s+", "", lines[i])) + "</li>")
+            # Bullet list. A wrapped bullet continues on indented non-bullet
+            # lines; a deeper-indented bullet opens a nested <ul> (one level).
+            items = []          # top-level items: [text, [sub-items]]
+            while i < n and lines[i].strip() and re.match(r"^\s*[-*]\s+", lines[i]) or (i < n and items and lines[i].startswith(" ") and lines[i].strip()):
+                cur = lines[i]
+                mb = re.match(r"^(\s*)[-*]\s+(.*)$", cur)
+                if mb:
+                    depth = len(mb.group(1))
+                    if depth >= 2 and items:
+                        items[-1][1].append(mb.group(2))
+                    else:
+                        items.append([mb.group(2), []])
+                else:                                   # continuation line
+                    txt = cur.strip()
+                    if items[-1][1]:
+                        items[-1][1][-1] += " " + txt
+                    else:
+                        items[-1][0] += " " + txt
                 i += 1
-            out.append("<ul>" + "".join(items) + "</ul>")
+            html_items = []
+            for text, subs in items:
+                sub = ("<ul>" + "".join("<li>%s</li>" % inline(t) for t in subs) + "</ul>") if subs else ""
+                html_items.append("<li>%s%s</li>" % (inline(text), sub))
+            out.append("<ul>" + "".join(html_items) + "</ul>")
             continue
         if not line.strip():
             i += 1

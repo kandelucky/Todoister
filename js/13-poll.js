@@ -3,6 +3,7 @@
 // To see the UI live — 10s poll, but only when idle
 // (focused input/textarea, modal, inline-add form → poll stops).
 function shouldPoll(){
+  if(window.__trayHidden) return false;   // window hidden to the tray (app.py) — resume on show
   if(modalTaskId) return false;
   if(inlineAdd) return false;
   if(subAddFor || commentAddFor) return false;

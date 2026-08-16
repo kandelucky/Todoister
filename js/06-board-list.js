@@ -16,7 +16,7 @@ function renderSection(proj, col){
   const items = state.filter(t => t.project === proj && (t.section || "") === col.name && !t.completed);
   const cards = items.map(t => taskCard(t)).join("");
   const menuBtn = col.editable
-    ? `<button class="menu-btn" onclick="openSectionMenu(event,'${esc(proj)}','${esc(col.name)}')">⋯</button>`
+    ? `<button class="menu-btn" onclick="openSectionMenu(event,'${esc(proj)}','${esc(col.name)}')">${SVG.ellipsis}</button>`
     : "";
   const titleEl = col.editable ? sectionTitleHtml(proj, col.name) : esc(col.title);
   const renamingThis = inlineRename && inlineRename.proj === proj && inlineRename.name === col.name;
@@ -91,7 +91,8 @@ function taskCard(t){
           </div>
           ${tags ? `<div id="task-info-tags">${tags}</div>` : ""}
         </div>
-        <button class="menu-btn" onclick="event.stopPropagation(); openTaskCtxMenu(event,'${t.id}')">⋯</button>
+        ${t.sticky ? `<button class="task-pin" onclick="event.stopPropagation(); toggleSticky('${t.id}')" title="${esc(tr('sticky.unmake'))}"><span class="on">${SVG.pin}</span><span class="off">${SVG.pinOff}</span></button>` : ""}
+        <button class="menu-btn" onclick="event.stopPropagation(); openTaskCtxMenu(event,'${t.id}')" title="${esc(tr('modal.more_actions'))}">${SVG.ellipsis}</button>
       </div>
     </div>
   </div>`;
@@ -115,7 +116,7 @@ function renderList(row){
           <h3>${sectionTitleHtml(proj, sec.name)}</h3>
           <span class="count">${tasks.length}</span>
           <span class="spacer"></span>
-          <button class="menu-btn" onclick="openSectionMenu(event,'${esc(proj)}','${esc(sec.name)}')">⋯</button>
+          <button class="menu-btn" onclick="openSectionMenu(event,'${esc(proj)}','${esc(sec.name)}')">${SVG.ellipsis}</button>
         </header>`;
       }
       tasks.forEach(t => { html += taskCard(t); });

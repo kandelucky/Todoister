@@ -37,12 +37,36 @@ function render(){
 }
 
 /* ============ STICKY NOTES (super-priority, top-right queue) ============ */
-// Up to STICKY_MAX tasks can be pinned; STICKY_VISIBLE cards are shown, the rest
-// wait in a queue behind a "+N" card (click → popover with the whole queue).
+// Up to STICKY_MAX tasks can be pinned; as many cards as fit in the free strip
+// (right of the sidebar, left of the top-right toolbar) are shown — 1, 2, 3, 4… —
+// the rest wait in a queue behind a "+N" card (click → popover with the whole queue).
+// No room for even one card → only the "+N" card. Recomputed on window resize.
 // Complete / delete / unpin → the next queued task surfaces automatically.
 const STICKY_MAX = 10;
-const STICKY_VISIBLE = 2;
+const STICKY_CARD_W = 250, STICKY_CARD_MAX_VW = 0.30, STICKY_GAP = 14, STICKY_MORE_W = 52, STICKY_PAD = 16;
+let _stickyShown = 0;  // cards currently on screen (used by the popover tint)
 let _stickySig = "";   // last rendered signature — skip rebuild when unchanged (avoids sync flicker)
+// Free strip: from the sidebar's right edge — or the page title's right edge when the
+// title (Inbox / project name / breadcrumb) is visible — (+pad) to the toolbar reserve (CSS right:284px).
+function stickyLayerLeft(){
+  const sb = document.getElementById("app-sidebar-container");
+  let left = sb && sb.offsetParent !== null ? sb.getBoundingClientRect().right : 280;
+  const tw = document.querySelector("#large-header .hdr-titlewrap");
+  if(tw && tw.offsetParent !== null){
+    const r = tw.getBoundingClientRect();
+    if(r.width > 0) left = Math.max(left, r.right);
+  }
+  return left + STICKY_PAD;
+}
+// How many of `total` cards fit fully; a "+N" card is required whenever not all fit.
+function stickyFit(total, avail){
+  const cardW = Math.min(STICKY_CARD_W, window.innerWidth * STICKY_CARD_MAX_VW);
+  for(let n = total; n >= 1; n--){
+    const need = n * cardW + (n - 1) * STICKY_GAP + (n < total ? STICKY_GAP + STICKY_MORE_W : 0);
+    if(need <= avail) return n;
+  }
+  return 0;
+}
 const _PRIO_RANK = {P1:1, P2:2, P3:3, P4:4};
 // Queue order: soonest due first (no due → last) → higher priority → text A→Z.
 function stickyOrder(a, b){
@@ -59,13 +83,18 @@ function renderStickies(){
   if(!layer) return;
   if(!connected){ if(_stickySig !== ""){ layer.innerHTML = ""; _stickySig = ""; closeStickyPopover(); } return; }
   const all = stickyTasks();
-  const list = all.slice(0, STICKY_VISIBLE);
+  const left = stickyLayerLeft();
+  layer.style.left = left + "px";
+  const avail = Math.max(0, layer.getBoundingClientRect().width || (window.innerWidth - 284 - left));
+  const shown = stickyFit(all.length, avail);
+  const list = all.slice(0, shown);
   const more = all.length - list.length;
   // Only touch the DOM when the visible set actually changes. render() runs on every
   // sync poll; without this guard the cards would be recreated each time and flicker.
-  const sig = all.map(t => t.id + "|" + (t.priority||"") + "|" + (t.text||"") + "|" + (t.due_date||"") + (t.due_time||"")).join("§");
+  const sig = shown + "@" + Math.round(left) + "#" + all.map(t => t.id + "|" + (t.priority||"") + "|" + (t.text||"") + "|" + (t.due_date||"") + (t.due_time||"")).join("§");
   if(sig === _stickySig) return;
   _stickySig = sig;
+  _stickyShown = shown;
   layer.innerHTML = list.map((t) => {
     const pc = PCLS[t.priority] || "";
     return `<div class="sticky-note">
@@ -105,7 +134,7 @@ function renderStickyPopover(){
   el.innerHTML = `<div class="ctx-head">${esc(tr("sticky.queue"))} · ${all.length}/${STICKY_MAX}</div>` +
     all.map((t, i) => {
       const pc = PCLS[t.priority] || "";
-      return `<div class="sticky-row${i < STICKY_VISIBLE ? " shown" : ""}">
+      return `<div class="sticky-row${i < _stickyShown ? " shown" : ""}">
         <button class="sticky-check ${pc}" onclick="completeTask('${t.id}')" title="${esc(tr('sticky.complete'))}">${SVG.check}</button>
         <span class="sticky-row-text" onclick="openModal('${t.id}'); closeStickyPopover()">${esc(t.text)}</span>
         ${t.due_date ? `<span class="sticky-row-due${isOverdue(t.due_date) ? " overdue" : ""}">${esc(fmtDate(t.due_date))}${t.due_time ? " " + esc(t.due_time) : ""}</span>` : ""}
@@ -138,6 +167,12 @@ document.addEventListener("click", e => {
 document.addEventListener("keydown", e => {
   if(e.key === "Escape" && _stickyPopOpen){ closeStickyPopover(); e.stopImmediatePropagation(); }
 }, true);
+// Window resized → the free strip changed → re-measure how many cards fit.
+let _stickyResizeRaf = 0;
+window.addEventListener("resize", () => {
+  if(_stickyResizeRaf) return;
+  _stickyResizeRaf = requestAnimationFrame(() => { _stickyResizeRaf = 0; _stickySig = ""; renderStickies(); });
+});
 
 function renderSidebar(){
   document.getElementById("count-inbox").textContent = projectCount("Inbox") || "";

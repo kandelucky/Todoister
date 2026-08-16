@@ -312,8 +312,9 @@
   .toast-sub{opacity:0.7; font-size:12px; margin-top:2px;}
   .toast-action{margin-left:12px; color:var(--accent); font-weight:600; background:none; border:none; cursor:pointer; font-size:inherit; padding:0; white-space:nowrap;}
   .toast-action:hover{text-decoration:underline;}
-  /* ===== Sticky notes (super-priority, top-centre, max 2) — app green ===== */
-  #sticky-layer{position:fixed; top:32px; left:0; right:284px; display:flex;
+  /* ===== Sticky notes (super-priority, top strip right of the sidebar) — app green =====
+     left is set by JS (sidebar edge + pad); how many cards fit is measured in renderStickies() */
+  #sticky-layer{position:fixed; top:32px; left:296px; right:284px; display:flex;
     justify-content:flex-end; gap:14px; pointer-events:none; z-index:90;}
   .sticky-note{position:relative; width:250px; max-width:30vw;
     background:#637760; color:#f1f2ee; border-radius:10px;

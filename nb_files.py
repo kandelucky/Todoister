@@ -25,10 +25,11 @@ import threading
 import datetime
 import urllib.request
 import urllib.error
+import urllib.parse
 import uuid
 
 import sync as sync_mod
-from store import db, _lock, log_action, now, now_iso, queue_cmd
+from store import db, _lock, log_action, now, now_iso, queue_cmd, build_item_add_args
 
 NB_FILE_NAME = "Todoister-page.json"
 NB_FILE_NOTE = "Todoister page data — do not delete this file"
@@ -219,3 +220,179 @@ def _flush_due_locked(force_id):
     elif later:
         schedule_flush(NB_FILE_IDLE)
     return done
+
+
+# ───────── pages deleted on Todoist: restore / discard ─────────
+# sync._flag_remote_delete marks a Notebook page that Todoist deleted while it was still live
+# here (task_local.remote_deleted_at + the comment ids live at that moment). The page body is
+# still in task_local.body_json, so the user can bring it back or let the local copy go.
+
+_MAX_REUPLOAD = 6 * 1024 * 1024
+
+
+def _parse_att(raw):
+    try:
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _fetch_todoist_file(url):
+    """Download an attachment with our Bearer auth. Returns bytes or None (gone / error)."""
+    try:
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {sync_mod.TOKEN}", "User-Agent": "Mozilla/5.0",
+        })
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = r.read(_MAX_REUPLOAD + 1)
+        if not data or len(data) > _MAX_REUPLOAD:
+            return None
+        return data
+    except Exception as e:
+        log_action(f"[{now()}] restore: file gone/unreachable {url[:80]}: {e}")
+        return None
+
+
+def _js_encode(s):
+    """encodeURIComponent-compatible quoting (the envelope stores proxied urls made in JS)."""
+    return urllib.parse.quote(s, safe="-_.!~*'()")
+
+
+def resolve_remote_deleted(ids, action):
+    """action = "discard": drop the local copy (task_local row) — the page stays deleted.
+    action = "restore": recreate the page on Todoist (item_add, temp id → remapped on push),
+    keep body_json, re-upload the page file, and re-attach the files that were on the page
+    (downloaded again while Todoist still serves them; ones already purged are dropped).
+    Returns {"restored": n, "discarded": n, "files": n, "files_lost": n}."""
+    ids = [i for i in (ids or []) if i]
+    res = {"restored": 0, "discarded": 0, "files": 0, "files_lost": 0}
+    if not ids:
+        return res
+    if action == "discard":
+        with _lock:
+            with db() as conn:
+                for tid in ids:
+                    conn.execute("DELETE FROM task_local WHERE task_id=?", (tid,))
+                    res["discarded"] += 1
+                    log_action(f"[{now()}] {tid} → notebook page: local copy discarded (deleted on Todoist)")
+                conn.commit()
+        return res
+    if action != "restore":
+        return res
+
+    # Phase 1 (DB): bring each task back under a fresh temp id + queue item_add; collect the
+    # file comments to re-upload; text comments are re-queued right away.
+    reups = []    # (task_id, old_cid, att, content)
+    with _lock:
+        with db() as conn:
+            for tid in ids:
+                row = conn.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+                tl = conn.execute("SELECT * FROM task_local WHERE task_id=?", (tid,)).fetchone()
+                if not row or not tl or not tl["remote_deleted_at"]:
+                    continue
+                cids = []
+                try:
+                    cids = json.loads(tl["remote_deleted_comments"] or "[]")
+                except Exception:
+                    pass
+                # Anything still queued for the old id targets a task Todoist no longer has —
+                # it would only fail forever; the fresh item_add below carries the current state.
+                conn.execute("DELETE FROM pending_ops WHERE args_json LIKE ?", (f'%"{tid}"%',))
+                new_id = str(uuid.uuid4())
+                sync_mod.apply_temp_id_mapping(conn, {tid: new_id})   # renames task/task_local/comment refs
+                # Todoist's delete left a stub in tasks — write the snapshot (real content,
+                # description, section, priority, labels, due) back before re-adding.
+                try:
+                    snap = json.loads(tl["remote_deleted_task"] or "{}")
+                except Exception:
+                    snap = {}
+                nb = conn.execute(
+                    "SELECT id FROM projects WHERE name=? AND is_deleted=0", (sync_mod.NOTEBOOK_PROJECT_NAME,)
+                ).fetchone()
+                pid = (nb and nb["id"]) or snap.get("project_id") or row["project_id"]
+                sid = snap.get("section_id")
+                if sid and not conn.execute(
+                    "SELECT 1 FROM sections WHERE id=? AND is_deleted=0", (sid,)
+                ).fetchone():
+                    sid = None
+                conn.execute(
+                    "UPDATE tasks SET project_id=?, section_id=?, content=?, description=?, priority=?, "
+                    "labels_json=?, due_date=?, due_datetime=?, due_string=?, due_is_recurring=?, "
+                    "due_timezone=?, deadline_date=?, child_order=?, "
+                    "is_deleted=0, checked=0, completed_at=NULL, updated_at=? WHERE id=?",
+                    (pid, sid, snap.get("content") or row["content"] or "",
+                     snap.get("description") or row["description"] or "",
+                     snap.get("priority") or row["priority"] or 1,
+                     snap.get("labels_json") or row["labels_json"] or "[]",
+                     snap.get("due_date"), snap.get("due_datetime"), snap.get("due_string"),
+                     int(snap.get("due_is_recurring") or 0), snap.get("due_timezone"),
+                     snap.get("deadline_date"), snap.get("child_order") or 0,
+                     now_iso(), new_id),
+                )
+                row = conn.execute("SELECT * FROM tasks WHERE id=?", (new_id,)).fetchone()
+                queue_cmd(conn, "item_add", build_item_add_args(conn, row))
+                for cid in cids:
+                    c = conn.execute("SELECT * FROM comments WHERE id=?", (cid,)).fetchone()
+                    if not c:
+                        continue
+                    conn.execute("UPDATE comments SET is_deleted=1 WHERE id=?", (cid,))   # gone on Todoist
+                    att = _parse_att(c["file_attachment"])
+                    if is_page_file_comment(att):
+                        continue                          # page file → re-uploaded by the flush below
+                    if att and att.get("file_url"):
+                        reups.append((new_id, cid, att, c["content"] or ""))
+                    elif (c["content"] or "").strip():
+                        ncid = str(uuid.uuid4())
+                        conn.execute(
+                            "INSERT INTO comments(id,task_id,content,posted_at) VALUES(?,?,?,?)",
+                            (ncid, new_id, c["content"], now_iso()),
+                        )
+                        queue_cmd(conn, "note_add", {"temp_id": ncid, "item_id": new_id, "content": c["content"]})
+                conn.execute(
+                    "UPDATE task_local SET remote_deleted_at=NULL, remote_deleted_comments=NULL, "
+                    "remote_deleted_task=NULL, nb_file_sha=NULL, nb_file_dirty=1, nb_file_dirty_at=? WHERE task_id=?",
+                    (now_iso(), new_id),
+                )
+                res["restored"] += 1
+                log_action(f"[{now()}] {tid} → notebook page restored as {new_id[:8]} «{(row['content'] or '')[:30]}»")
+            conn.commit()
+
+    # Phase 2 (network, no lock): download + re-upload every file that still exists.
+    uploaded = []   # (task_id, old_cid, old_att, new_meta|None, content)
+    for task_id, cid, att, content in reups:
+        data = _fetch_todoist_file(att["file_url"])
+        meta = None
+        if data:
+            try:
+                meta = todoist_upload(data, att.get("file_name") or "file",
+                                      att.get("file_type") or "application/octet-stream")
+            except RuntimeError as e:
+                log_action(f"[{now()}] restore: re-upload failed {att.get('file_name')}: {e.args[-1]}")
+        uploaded.append((task_id, cid, att, meta, content))
+
+    # Phase 3 (DB): new comment rows + note_add, and point the page body at the new urls.
+    with _lock:
+        with db() as conn:
+            for task_id, cid, att, meta, content in uploaded:
+                if not meta or not meta.get("file_url"):
+                    res["files_lost"] += 1
+                    continue
+                ncid = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO comments(id,task_id,content,posted_at,file_attachment) VALUES(?,?,?,?,?)",
+                    (ncid, task_id, content, now_iso(), json.dumps(meta, ensure_ascii=False)),
+                )
+                queue_cmd(conn, "note_add", {
+                    "temp_id": ncid, "item_id": task_id, "content": content, "file_attachment": meta,
+                })
+                tl = conn.execute("SELECT body_json FROM task_local WHERE task_id=?", (task_id,)).fetchone()
+                body = (tl and tl["body_json"]) or ""
+                old_u, new_u = att["file_url"], meta["file_url"]
+                if body and old_u:
+                    body2 = body.replace(_js_encode(old_u), _js_encode(new_u)).replace(old_u, new_u)
+                    if body2 != body:
+                        conn.execute("UPDATE task_local SET body_json=? WHERE task_id=?", (body2, task_id))
+                res["files"] += 1
+            conn.commit()
+    schedule_flush(1.0)   # the page file (with the new urls) goes up right after
+    return res

@@ -253,15 +253,36 @@ window.NB = {
 // (Todoist showed the page as a code blob). New: description = Markdown, JSON envelope local
 // (+ attached file via nb_files.py). Runs once per launch after the first state load; only
 // old-format pages are touched, so it is idempotent and resumable (interrupted → next launch).
+// Second pass (2026-08-16): descriptions that still carry an uploaded-file link
+// (`![x](https://files.todoist.com/…)`) — those links are dead in Todoist (Bearer auth), so
+// the storage Markdown now writes such media as a plain "📎 name" line; pages saved before
+// that are rewritten once here (from the local envelope when it matches, else from the Markdown).
+const TODOIST_FILE_LINK_RE = /\]\(https?:\/\/(files|image-resize)\.todoist\.com\//;
+const NB_ATT_MARK = String.fromCodePoint(0x1F4CE);   // 📎 — same as the bundle's NB_ATT_MARK
+// Candidates: a dead file link, or a "📎" line (re-normalised if the name should differ).
+const hasTodoistFileLinks = md => TODOIST_FILE_LINK_RE.test(md || "") || (md || "").includes(NB_ATT_MARK);
+async function convertLinkedNotebookPage(t){
+  const T = window.NB_TOOLS;
+  const env = T.parseEnvelope(t.body_json || "");
+  const blocks = (env && env.md_hash === T.mdHash(t.description || ""))
+    ? env.blocks
+    : await T.mdToBlocks(t.description || "", t.comments || []);
+  const md = await T.blocksToMd(blocks, t.comments || []);
+  if(T.mdHash(md) === T.mdHash(t.description || "")) return false;   // same after normalisation → leave
+  await window.NB.saveBody(t.id, md, T.envelope(blocks, md));
+  return true;
+}
 let _nbMigrationStarted = false;
 async function maybeMigrateNotebookPages(){
   if(_nbMigrationStarted) return;
   const T = window.NB_TOOLS;
   if(!T || !window.NB) return;                    // bundle not ready yet → try on the next poll
-  const legacy = state.filter(t => t.project === "Notebook" && !t.completed && !!T.parseLegacyJsonBody(t.description || ""));
+  const pages = state.filter(t => t.project === NOTEBOOK_PROJECT && !t.completed);
+  const legacy = pages.filter(t => !!T.parseLegacyJsonBody(t.description || ""));
+  const linked = pages.filter(t => !T.parseLegacyJsonBody(t.description || "") && hasTodoistFileLinks(t.description || ""));
   _nbMigrationStarted = true;                     // decided: either nothing to do or we run once
-  if(!legacy.length) return;
-  const total = legacy.length;
+  if(!legacy.length && !linked.length) return;
+  const total = legacy.length + linked.length;
   let done = 0, failed = 0;
   const bar = showToast(tr("nb.migrating", {n: 0, total}), "", 600000);
   const setMsg = m => { if(bar){ const b = bar.querySelector(".toast-body"); if(b) b.textContent = m; } };
@@ -275,9 +296,106 @@ async function maybeMigrateNotebookPages(){
     } catch(e){ failed++; console.warn("notebook migration failed for", t.id, e); }
     setMsg(tr("nb.migrating", {n: done + failed, total}));
   }
+  let skipped = 0;
+  for(const t of linked){
+    try { if(await convertLinkedNotebookPage(t)) done++; else skipped++; }
+    catch(e){ failed++; console.warn("notebook link rewrite failed for", t.id, e); }
+    setMsg(tr("nb.migrating", {n: done + failed + skipped, total}));
+  }
   if(bar) bar.remove();
+  if(!done && !failed){ if(window.NB.notify) window.NB.notify(); return; }   // nothing actually changed — stay quiet
   showToast(tr(failed ? "nb.migrated_partial" : "nb.migrated", {n: done, failed}), failed ? "error" : "", 8000);
   if(window.NB.notify) window.NB.notify();
+}
+
+// ---- Notebook pages deleted on Todoist (phone / web) ----
+// The server keeps the local page body when a Notebook task disappears from Todoist and lists
+// those pages in state.nb_deleted_pending. Once per new set we ask the user, per page (checkboxes):
+// restore on Todoist (text + structure + files that are still downloadable) or discard the local
+// copy. "Later" keeps them pending — asked again at the next launch.
+let _nbDeletedSeen = new Set();
+let _nbDeletedOpen = false;
+let nbDeletedPending = [];
+function maybeNotebookDeletedCheck(){
+  const list = nbDeletedPending || [];
+  if(_nbDeletedOpen || !list.length) return;
+  if(!list.some(p => !_nbDeletedSeen.has(p.id))) return;   // nothing new since we last asked
+  list.forEach(p => _nbDeletedSeen.add(p.id));
+  _nbDeletedOpen = true;
+  notebookDeletedDialog(list).then(async res => {
+    _nbDeletedOpen = false;
+    if(!res || !res.action || !res.ids.length) return;
+    const bar = showToast(tr(res.action === "restore" ? "nb.deleted_restoring" : "nb.deleted_discarding"), "", 600000);
+    let d = null;
+    try {
+      const r = await fetch("/api/nb_deleted_resolve", {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ids: res.ids, action: res.action})});
+      d = await r.json();
+      if(!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    } catch(e){
+      if(bar) bar.remove();
+      showToast(tr("toast.save_failed", {msg: e.message}), "error");
+      return;
+    }
+    if(bar) bar.remove();
+    if(d.tasks){
+      state = d.tasks; nbDeletedPending = d.nb_deleted_pending || [];
+      pendingCount = d.pending_count !== undefined ? d.pending_count : pendingCount;
+      render(); if(window.NB && window.NB.notify) window.NB.notify();
+    }
+    const sm = d.summary || {};
+    if(res.action === "restore"){
+      showToast(tr(sm.files_lost ? "nb.deleted_restored_lost" : "nb.deleted_restored", {n: sm.restored || 0, lost: sm.files_lost || 0}), sm.files_lost ? "warn" : "", 8000);
+      // The restored description may still carry old file links — regenerate it (see convertLinkedNotebookPage).
+      const restoredIds = new Set(res.ids);
+      const T = window.NB_TOOLS;
+      if(T && window.NB){
+        for(const t of state.filter(t => t.project === NOTEBOOK_PROJECT && !t.completed)){
+          if(hasTodoistFileLinks(t.description || "")){ try { await convertLinkedNotebookPage(t); } catch(e){} }
+        }
+      }
+    } else {
+      showToast(tr("nb.deleted_discarded", {n: sm.discarded || 0}), "", 6000);
+    }
+  });
+}
+// Dialog: list of deleted pages with checkboxes (all checked) + restore / discard / later.
+// Resolves to {action: "restore"|"discard"|null, ids: [...]}.
+function notebookDeletedDialog(list){
+  return new Promise(resolve => {
+    const finish = action => {
+      const ids = [...document.querySelectorAll(".nb-del-item input:checked")].map(i => i.value);
+      document.getElementById("confirm-backdrop").classList.remove("show");
+      resolve({action, ids});
+    };
+    window._nbDelFinish = finish;
+    window._nbDelToggleAll = on => { document.querySelectorAll(".nb-del-item input").forEach(i => { i.checked = on; }); };
+    const rows = list.map(p => `<label class="pd-check nb-del-item">
+        <input type="checkbox" value="${esc(p.id)}" checked>
+        <span class="nb-del-title">${esc(p.title || tr("common.untitled"))}</span>
+        <span class="nb-del-meta">${esc(fmtDeletedAt(p.deleted_at))}${p.files ? " · " + esc(tr("nb.deleted_files", {n: p.files})) : ""}</span>
+      </label>`).join("");
+    const extra = `<div class="nb-del-list">${rows}</div>
+      <div class="nb-del-all">
+        <button class="pd-link" onclick="_nbDelToggleAll(true)">${esc(tr("nb.deleted_all"))}</button>
+        <button class="pd-link" onclick="_nbDelToggleAll(false)">${esc(tr("nb.deleted_none"))}</button>
+      </div>
+      <p class="pd-note">${esc(tr("nb.deleted_note"))}</p>`;
+    _openDialog(`
+      <div class="pd-head">${esc(tr("nb.deleted_title", {n: list.length}))}</div>
+      ${_uiBody(tr("nb.deleted_body"), extra)}
+      <div class="pd-foot nb-del-foot">
+        <button class="pd-btn cancel" onclick="_nbDelFinish(null)">${esc(tr("nb.deleted_later"))}</button>
+        <button class="pd-btn danger" onclick="_nbDelFinish('discard')">${esc(tr("nb.deleted_discard"))}</button>
+        <button class="pd-btn primary" onclick="_nbDelFinish('restore')">${esc(tr("nb.deleted_restore"))}</button>
+      </div>`);
+  });
+}
+function fmtDeletedAt(iso){
+  if(!iso) return "";
+  const d = new Date(iso);
+  if(isNaN(d)) return iso;
+  return d.toLocaleDateString(undefined, {day:"numeric", month:"short"}) + " " + d.toLocaleTimeString(undefined, {hour:"2-digit", minute:"2-digit"});
 }
 
 function renderContent(){

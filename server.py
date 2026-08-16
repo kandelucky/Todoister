@@ -682,6 +682,28 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(502, {"error": str(e)})
 
+    def _handle_nb_deleted_resolve(self):
+        """Notebook pages deleted on Todoist (state.nb_deleted_pending): the user chose
+        {ids:[…], action:"restore"|"discard"}. Restore talks to Todoist (re-uploads the page's
+        files), so it manages the DB lock itself — outside the generic _handle path."""
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return self._json(400, {"error": "bad json"})
+        action = body.get("action") or ""
+        if action not in ("restore", "discard"):
+            return self._json(400, {"error": "bad action"})
+        try:
+            summary = nb_files.resolve_remote_deleted(body.get("ids") or [], action)
+        except Exception as e:
+            log_action(f"[{now()}] ERROR nb_deleted_resolve: {e}")
+            return self._json(500, {"error": str(e)})
+        resp = {"ok": True, "summary": summary}
+        resp.update(load_state_dict())
+        self._json(200, resp)
+
     def _handle_file_alive(self):
         """Check whether a Todoist-hosted file still exists. Its comment may have been deleted
         elsewhere (phone/web) while we weren't watching; on open the note uses this to replace a
@@ -731,6 +753,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_export()
         if path == "/api/download":
             return self._handle_download()
+        if path == "/api/nb_deleted_resolve":
+            return self._handle_nb_deleted_resolve()
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
         try:

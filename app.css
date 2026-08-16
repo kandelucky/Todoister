@@ -1168,6 +1168,18 @@
   .pd-sw.sel{border-color:var(--text);}
   .pd-sw svg{width:14px; height:14px; color:#fff; display:none;}
   .pd-sw.sel svg{display:block;}
+  /* notebook: pages deleted on Todoist — checklist + restore/discard/later */
+  .nb-del-list{max-height:40vh; overflow-y:auto; margin:10px 0 0; border:1px solid var(--border); border-radius:6px; padding:2px 10px;}
+  .nb-del-item{margin:8px 0; align-items:flex-start;}
+  .nb-del-item input{margin-top:3px;}
+  .nb-del-title{color:var(--text); font-size:14px; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .nb-del-meta{color:var(--text-3); font-size:12px; white-space:nowrap;}
+  .nb-del-all{display:flex; gap:12px; margin:8px 0 0;}
+  .pd-link{background:none; border:none; padding:0; color:var(--text-2); font-size:12px; cursor:pointer; text-decoration:underline;}
+  .pd-link:hover{color:var(--text);}
+  .nb-del-foot{flex-wrap:wrap;}
+  .pd-btn.danger{color:#dc4c3e;}
+  .pd-btn.danger:hover{background:rgba(220,76,62,.12);}
   .pd-foot{display:flex; justify-content:flex-end; gap:8px; padding:14px 18px 16px;}
   .pd-btn{padding:8px 16px; border-radius:6px; font-size:14px; font-weight:500;}
   .pd-btn.cancel{color:var(--text-2);}

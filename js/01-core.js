@@ -237,6 +237,7 @@ async function fetchState(){
     filters = d.filters || [];
     pendingCount = d.pending_count || 0;
     prefs = d.prefs || {};
+    nbDeletedPending = d.nb_deleted_pending || [];
     if(d.gcal) gcalInfo = d.gcal;
     if(d.agent) agentInfo = d.agent;   // AI agent panel (js/14-agent.js)
     applySyncState(d);
@@ -244,6 +245,7 @@ async function fetchState(){
     render();
     maybeNotebookFavCheck();
     maybeMigrateNotebookPages();
+    maybeNotebookDeletedCheck();
   } catch(e){
     if(!isOffline){
       isOffline = true;
@@ -316,6 +318,7 @@ async function post(path, body){
       if(d.labels) setLabels(d.labels);
       if(d.filters) filters = d.filters;
       pendingCount = d.pending_count !== undefined ? d.pending_count : pendingCount;
+      if(d.nb_deleted_pending) nbDeletedPending = d.nb_deleted_pending;
       if(d.gcal) gcalInfo = d.gcal;
       if(d.agent) agentInfo = d.agent;   // AI agent panel (js/14-agent.js)
       applySyncState(d);

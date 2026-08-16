@@ -131,9 +131,9 @@ function segmentMarkdown(text) {
 // Load path (description Markdown → page): the stored Markdown comes from our own serialiser
 // (one blank line = block separator) or from an edit made in Todoist. Reuses the paste parser;
 // tuning of blank-line handling lives in mdToBlocksForLoad below.
-async function mdToBlocksForLoad(editor, md) {
+async function mdToBlocksForLoad(editor, md, comments) {
   const blocks = await mdToBlocksPreservingBlanks(editor, toDisplayMd(md || ''), { separatorBlank: true });
-  return reconstructAttachments(blocks);
+  return relinkAttachmentMarks(reconstructAttachments(blocks), comments);
 }
 
 // Build blocks from Markdown while KEEPING blank lines. Plain blank run → that many empty
@@ -389,12 +389,66 @@ function upgradeNativeMedia(editor) {
   });
 }
 
+// Uploaded media in the STORAGE Markdown (the Todoist description) is written as a plain
+// "📎 name" line instead of a link: files.todoist.com needs Bearer auth, so in Todoist such a link
+// was dead (Lasha, 2026-08-16). The rich page keeps the file through the JSON envelope; on a
+// Markdown-only load (edited in Todoist) relinkAttachmentMarks matches the name back to the
+// page's attachments. External links (YouTube, pasted web images) stay links — they work.
+const NB_ATT_MARK = String.fromCodePoint(0x1F4CE);   // 📎  (built at runtime, see the ZWSP note)
+function fileNameFromUrl(u) {
+  const last = String(u || '').split('?')[0].split('/').pop() || '';
+  try { return decodeURIComponent(last); } catch (e) { return last; }
+}
+function isUploadedMediaUrl(u) { return !!(rawFileUrl(u) || (u && isTodoistFileUrl(String(u)))); }
+// attNames = Map raw file_url → attachment file_name (the page's comments). That is the real
+// name (a Todoist url ends in ".../as/file.ext", not the original name; an image's name prop
+// may be a Markdown alt = caption), so a later relink matches the attachment.
+function attNameMap(comments) {
+  const m = new Map();
+  (comments || []).forEach((c) => { const a = c && c.attachment; if (a && a.file_url && a.file_name) m.set(a.file_url, a.file_name); });
+  return m;
+}
+function attMarkParagraph(b, attNames) {
+  const raw = rawFileUrl(b.props.url) || b.props.url || '';
+  const known = attNames && attNames.get(raw);
+  const name = known || (b.props.name || '').trim() || (b.props.caption || '').trim() || fileNameFromUrl(raw) || 'file';
+  return { type: 'paragraph', props: {}, content: [{ type: 'text', text: NB_ATT_MARK + ' ' + name, styles: {} }], children: [] };
+}
+// Text of a "📎 name" paragraph → the name, else null.
+function attMarkName(b) {
+  if (!b || b.type !== 'paragraph' || !Array.isArray(b.content) || !b.content.length) return null;
+  if (!b.content.every((ic) => ic && ic.type === 'text')) return null;
+  const txt = b.content.map((ic) => ic.text || '').join('').trim();
+  if (!txt.startsWith(NB_ATT_MARK)) return null;
+  const name = txt.slice(NB_ATT_MARK.length).trim();
+  return name || null;
+}
+// After a Markdown-only load: every "📎 name" line whose name matches one of the page's
+// attachments becomes that media block again (image/video/audio/file by MIME type).
+function relinkAttachmentMarks(blocks, comments) {
+  const atts = (comments || []).map((c) => c && c.attachment).filter((a) => a && a.file_url && a.file_name);
+  if (!atts.length) return blocks;
+  const walk = (arr) => (arr || []).map((b) => {
+    const name = attMarkName(b);
+    if (name) {
+      const att = atts.find((a) => a.file_name === name);
+      if (att) return { type: embedTypeForAtt(att), props: { url: attProxy(att.file_url), name: att.file_name || '' } };
+    }
+    return b.children && b.children.length ? { ...b, children: walk(b.children) } : b;
+  });
+  return walk(blocks);
+}
+
 // For Markdown export only: BlockNote's serializer doesn't know our custom blocks, so map them back
 // to native first — imageEmbed → image (so it becomes ![](url)); videoEmbed → its url on a line.
 // HTML export needs none of this (it clones the live rendered DOM).
-function mediaToNativeBlocks(blocks) {
+// forStorage (the Todoist description): uploaded media → "📎 name" paragraph (see NB_ATT_MARK).
+function mediaToNativeBlocks(blocks, forStorage, attNames) {
   return (blocks || []).map((b) => {
-    const children = b.children ? mediaToNativeBlocks(b.children) : b.children;
+    const children = b.children ? mediaToNativeBlocks(b.children, forStorage, attNames) : b.children;
+    if (forStorage && b.props && (NATIVE_MEDIA[b.type] || b.type === 'imageEmbed' || b.type === 'videoEmbed' || b.type === 'audioEmbed' || b.type === 'fileEmbed') && isUploadedMediaUrl(b.props.url)) {
+      return { ...attMarkParagraph(b, attNames), children };
+    }
     if (b.type === 'imageEmbed') return { ...b, type: 'image', props: { url: b.props.url || '', caption: b.props.caption || '', name: '', previewWidth: b.props.width || undefined }, children };
     if (b.type === 'audioEmbed') return { ...b, type: 'audio', props: { url: b.props.url || '', caption: b.props.caption || '', name: b.props.name || '' }, children };
     if (b.type === 'fileEmbed') return { ...b, type: 'file', props: { url: b.props.url || '', caption: b.props.caption || '', name: b.props.name || '' }, children };
@@ -595,8 +649,8 @@ function parseLegacyJsonBody(str) {
   return null;
 }
 // Editor document → the Markdown we store in the description (raw Todoist file URLs, capped).
-async function docToStorageMd(editor, blocks) {
-  const md = await editor.blocksToMarkdownLossy(mediaToNativeBlocks(blocks || editor.document));
+async function docToStorageMd(editor, blocks, comments) {
+  const md = await editor.blocksToMarkdownLossy(mediaToNativeBlocks(blocks || editor.document, true, attNameMap(comments)));
   return capMd(toStorageMd(md || ''));
 }
 const attIsImage = (a) => !!(a && (a.image || (a.file_type && a.file_type.startsWith('image/'))));
@@ -1023,8 +1077,8 @@ function Editor({ note, onChangeDoc, onReady, onMediaRemoved }) {
         // Else: legacy markdown / edited on Todoist — parse the Markdown and load here. (This
         // replaceBlocks does enter the undo history; acceptable for these cases.)
         if (!blocks) {
-          try { blocks = await mdToBlocksForLoad(editor, note.body || ''); }
-          catch (e) { blocks = reconstructAttachments(await editor.tryParseMarkdownToBlocks(toDisplayMd(note.body || ''))); }
+          try { blocks = await mdToBlocksForLoad(editor, note.body || '', note.comments); }
+          catch (e) { blocks = relinkAttachmentMarks(reconstructAttachments(await editor.tryParseMarkdownToBlocks(toDisplayMd(note.body || ''))), note.comments); }
         }
         if (!cancelled && blocks.length) {
           // Guarantee a text block to park in, so a media-only note still has a text
@@ -1522,7 +1576,8 @@ function App() {
     bodyTimer.current = setTimeout(async () => {
       try {
         const blocks = ed.document;
-        const md = await docToStorageMd(ed, blocks);
+        const cur = notesRef.current.find((n) => n.id === id);
+        const md = await docToStorageMd(ed, blocks, cur && cur.comments);
         const json = makeEnvelope(blocks, md);
         setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, body: md, body_json: json } : n)));
         await window.NB.saveBody(id, md, json);
@@ -1976,8 +2031,8 @@ function App() {
 let headlessEd = null;
 const headless = () => (headlessEd || (headlessEd = BlockNoteEditor.create({ schema: nbSchema })));
 window.NB_TOOLS = {
-  blocksToMd: (blocks) => docToStorageMd(headless(), blocks),
-  mdToBlocks: (md) => mdToBlocksForLoad(headless(), md),
+  blocksToMd: (blocks, comments) => docToStorageMd(headless(), blocks, comments),
+  mdToBlocks: (md, comments) => mdToBlocksForLoad(headless(), md, comments),
   envelope: (blocks, md) => makeEnvelope(blocks, md),
   parseEnvelope, parseLegacyJsonBody, mdHash,
 };

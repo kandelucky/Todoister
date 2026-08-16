@@ -345,7 +345,47 @@ def upsert_section(conn, s):
     )
 
 
+NOTEBOOK_PROJECT_NAME = "Notebook"   # mirrored in js NOTEBOOK_PROJECT / store.NOTEBOOK_PROJECT_NAME
+
+
+def _flag_remote_delete(conn, t):
+    """Todoist reports a task deleted that is still live locally (deleted from the phone /
+    web, not from Todoister). For Notebook pages remember it in task_local
+    (remote_deleted_at + the comment ids that were live at that moment) so the app can
+    offer "restore" or "discard the local copy" — the page body stays in
+    task_local.body_json until the user decides. Runs BEFORE the upsert, while the local
+    row still says is_deleted=0. Anything else (normal tasks, already-deleted rows) → no-op."""
+    if not t.get("is_deleted"):
+        return
+    try:
+        row = conn.execute("SELECT * FROM tasks WHERE id=?", (t["id"],)).fetchone()
+        if not row or row["is_deleted"] or row["parent_id"]:
+            return
+        pr = conn.execute("SELECT name FROM projects WHERE id=?", (row["project_id"],)).fetchone()
+        if not pr or (pr["name"] or "") != NOTEBOOK_PROJECT_NAME:
+            return
+        live = [c["id"] for c in conn.execute(
+            "SELECT id FROM comments WHERE task_id=? AND is_deleted=0", (t["id"],)
+        ).fetchall()]
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        # Todoist sends a deleted item as a stub (empty content, placeholder project_id) and
+        # the upsert below overwrites the row with it — keep a snapshot of the real row.
+        snap = json.dumps(dict(row), ensure_ascii=False)
+        conn.execute(
+            "INSERT INTO task_local(task_id, remote_deleted_at, remote_deleted_comments, remote_deleted_task) "
+            "VALUES(?,?,?,?) "
+            "ON CONFLICT(task_id) DO UPDATE SET remote_deleted_at=excluded.remote_deleted_at, "
+            "remote_deleted_comments=excluded.remote_deleted_comments, "
+            "remote_deleted_task=excluded.remote_deleted_task",
+            (t["id"], stamp, json.dumps(live), snap),
+        )
+        print(f"[sync] notebook page deleted on Todoist: {t['id']} — kept locally for restore/discard")
+    except sqlite3.OperationalError:
+        pass   # columns not migrated yet (store.ensure_schema runs at app start)
+
+
 def upsert_task(conn, t):
+    _flag_remote_delete(conn, t)
     due = t.get("due") or {}
     deadline = t.get("deadline") or {}
     duration = t.get("duration") or {}

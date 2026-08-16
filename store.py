@@ -28,6 +28,7 @@ SYNC_INTERVAL = 30  # seconds between background sync rounds (shown in the sync 
 FILTER_SYNC_LIMIT = 3  # Todoist Free tier: max 3 filters mirrored to the account
 _lock = threading.Lock()
 NB_PAGE_FILE_NAME = "Todoister-page.json"   # mirrored in nb_files.NB_FILE_NAME (store must not import it)
+NOTEBOOK_PROJECT_NAME = sync_mod.NOTEBOOK_PROJECT_NAME   # "Notebook" — recognised by exact name
 
 # Todoist avatar CDN (public images, no auth needed).
 AVATAR_CDN = "https://dcff1xvirvpfp.cloudfront.net"
@@ -147,6 +148,14 @@ def ensure_schema():
         for col in ("nb_file_dirty INTEGER DEFAULT 0", "nb_file_dirty_at TEXT", "nb_file_sha TEXT"):
             try:
                 conn.execute(f"ALTER TABLE task_local ADD COLUMN {col}")
+            except Exception:
+                pass
+        # remote_deleted_* — a Notebook page deleted on Todoist (phone/web) while still live
+        # here: when + which comments were live then (sync._flag_remote_delete). The page body
+        # stays in body_json until the user restores or discards it (nb_files.resolve_remote_deleted)
+        for col in ("remote_deleted_at TEXT", "remote_deleted_comments TEXT", "remote_deleted_task TEXT"):
+            try:
+                conn.execute("ALTER TABLE task_local ADD COLUMN " + col)
             except Exception:
                 pass
         # task_local.gcal_event_id/gcal_sig — Google Calendar full sync (Stage B2):
@@ -390,6 +399,48 @@ def load_state_dict():
                 "reminders": reminders_by_task.get(r["id"], []),
             })
 
+        # Notebook pages deleted on Todoist but still held locally — the app asks the user
+        # (restore / discard). Only while the Notebook project itself is alive.
+        # (Todoist sends the deleted task as a stub — title comes from the snapshot taken at
+        # detection time; only while the Notebook project itself is alive.)
+        nb_deleted_pending = []
+        try:
+            nb_alive = conn.execute(
+                "SELECT 1 FROM projects WHERE name=? AND is_deleted=0", (NOTEBOOK_PROJECT_NAME,)
+            ).fetchone() is not None
+            for r in (conn.execute(
+                "SELECT t.id, t.content, tl.remote_deleted_at, tl.remote_deleted_comments, tl.remote_deleted_task "
+                "FROM tasks t JOIN task_local tl ON tl.task_id=t.id "
+                "WHERE t.is_deleted=1 AND tl.remote_deleted_at IS NOT NULL "
+                "ORDER BY tl.remote_deleted_at DESC",
+            ).fetchall() if nb_alive else []):
+                try:
+                    snap = json.loads(r["remote_deleted_task"] or "{}")
+                except Exception:
+                    snap = {}
+                try:
+                    cids = json.loads(r["remote_deleted_comments"] or "[]")
+                except Exception:
+                    cids = []
+                files = 0
+                if cids:
+                    q = ",".join("?" * len(cids))
+                    for c in conn.execute(
+                        f"SELECT file_attachment FROM comments WHERE id IN ({q})", cids
+                    ).fetchall():
+                        try:
+                            att = json.loads(c["file_attachment"]) if c["file_attachment"] else None
+                        except Exception:
+                            att = None
+                        if att and (att.get("file_name") or "") != NB_PAGE_FILE_NAME:
+                            files += 1
+                nb_deleted_pending.append({
+                    "id": r["id"], "title": snap.get("content") or r["content"] or "",
+                    "deleted_at": r["remote_deleted_at"] or "", "files": files,
+                })
+        except sqlite3.OperationalError:
+            pass
+
         pending = conn.execute("SELECT COUNT(*) c FROM pending_ops").fetchone()["c"]
         state_rows = conn.execute(
             "SELECT key, value FROM sync_state WHERE key IN "
@@ -410,6 +461,7 @@ def load_state_dict():
             "labels": label_list,
             "filters": filter_list,
             "pending_count": pending,
+            "nb_deleted_pending": nb_deleted_pending,
             "prefs": {
                 "nb_fav_dismissed": get_setting(conn, "nb_fav_dismissed", "0") == "1",
             },

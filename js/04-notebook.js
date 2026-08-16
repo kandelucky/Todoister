@@ -307,6 +307,11 @@ function renderContent(){
     renderCalendar(row);
     return;
   }
+  if(currentView === "agent"){
+    pbv.classList.add("list-mode");
+    renderAgentPanel(row);   // AI agent panel (js/14-agent.js)
+    return;
+  }
   if(currentView === "projects-page"){
     pbv.classList.add("list-mode");
     renderProjectsPage(row);

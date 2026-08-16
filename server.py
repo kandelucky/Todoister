@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import sync as sync_mod
 import nb_files
+import agent_panel
 # Access via sync_mod.TOKEN so reload_token() takes effect at runtime
 import gcal
 import gcal_api
@@ -148,6 +149,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/state":
             with _lock:
                 self._json(200, load_state_dict())
+        elif path == "/api/agent_queue":
+            # AI agent panel: the agent's poll (also its heartbeat) — agent_panel.py
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            with _lock:
+                with db() as conn:
+                    resp = agent_panel.get_queue(conn, {k: v[0] for k, v in qs.items()})
+                    conn.commit()
+            self._json(200, resp)
         elif path == "/oauth/callback":
             # Google OAuth loopback redirect (full-sync authorization).
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -746,6 +755,8 @@ class Handler(BaseHTTPRequestHandler):
         # full sync is off or nothing changed).
         gcal_schedule_reconcile()
         resp = {"ok": True}
+        if isinstance(ok, dict):
+            resp.update(ok)          # handler extras (e.g. agent_panel batch_id)
         if getattr(self, "added_id", None):
             resp["new_id"] = self.added_id
         if getattr(self, "deleted_ids", None):
@@ -756,6 +767,10 @@ class Handler(BaseHTTPRequestHandler):
     def _handle(self, conn, path, body):
         tid = body.get("id")
         short = short_title(conn, tid) if tid else ""
+
+        if path.startswith("/api/agent_"):
+            # AI agent panel endpoints live in agent_panel.py (returns True / dict / False)
+            return agent_panel.handle_post(conn, path, body)
 
         if path == "/api/update" and tid:
             return self._update_field(conn, tid, short, body.get("field"), body.get("value"))

@@ -149,6 +149,7 @@ function renderSidebar(){
   document.getElementById("count-help").textContent = "";
   // Reporting has no count badge in Todoist (completed history isn't a live count).
   document.getElementById("count-completed").textContent = "";
+  if(typeof agentRenderNav === "function") agentRenderNav();   // AI agent panel badge / disabled / locked (js/14-agent.js)
   const userProjects = projects.filter(p => p !== INBOX_NAME);  // Inbox is its own top nav item, not a "My Project"
   document.getElementById("projects-used").textContent = tr("sidebar.used", {n: userProjects.length, total: PROJECT_LIMIT});
 
@@ -269,7 +270,7 @@ function renderHeader(){
   else if(currentView.startsWith("project:")) title = currentView.slice(8);
   else if(currentView.startsWith("label:")) title = currentView.slice(6);
   else if(currentView.startsWith("filter:")){ const f = filterById(currentView.slice(7)); title = f ? f.name : tr("nav.filters_labels"); }
-  else title = {today:tr("nav.today"), upcoming:tr("nav.upcoming"), filters:tr("nav.filters_labels"), completed:tr("nav.reporting"), calendar:tr("nav.calendar"), "projects-page":tr("sidebar.my_projects")}[currentView] || currentView;
+  else title = {today:tr("nav.today"), upcoming:tr("nav.upcoming"), filters:tr("nav.filters_labels"), completed:tr("nav.reporting"), calendar:tr("nav.calendar"), agent:(typeof agentTitle === "function" ? agentTitle() : tr("nav.agent")), "projects-page":tr("sidebar.my_projects")}[currentView] || currentView;
   if(searchQuery){
     const n = visibleTasks().length;
     title += tr("header.search_results", {n});
@@ -344,5 +345,6 @@ function renderHeader(){
     lcSw.querySelector('[data-lc="list"]').classList.toggle("on", !inCal);
     lcSw.querySelector('[data-lc="cal"]').classList.toggle("on", inCal);
   }
+  if(typeof agentRenderHeader === "function") agentRenderHeader();   // AI agent panel (js/14-agent.js)
 }
 

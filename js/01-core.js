@@ -238,6 +238,7 @@ async function fetchState(){
     pendingCount = d.pending_count || 0;
     prefs = d.prefs || {};
     if(d.gcal) gcalInfo = d.gcal;
+    if(d.agent) agentInfo = d.agent;   // AI agent panel (js/14-agent.js)
     applySyncState(d);
     if(isOffline){ isOffline = false; }
     render();
@@ -316,6 +317,7 @@ async function post(path, body){
       if(d.filters) filters = d.filters;
       pendingCount = d.pending_count !== undefined ? d.pending_count : pendingCount;
       if(d.gcal) gcalInfo = d.gcal;
+      if(d.agent) agentInfo = d.agent;   // AI agent panel (js/14-agent.js)
       applySyncState(d);
       if(isOffline){ isOffline = false; }
       render();

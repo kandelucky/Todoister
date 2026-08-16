@@ -14,6 +14,7 @@ import threading
 import uuid
 
 import sync as sync_mod
+import agent_panel
 # Access via sync_mod.TOKEN so reload_token() takes effect at runtime
 
 from paths import RES_DIR, DATA_DIR
@@ -155,6 +156,8 @@ def ensure_schema():
                 conn.execute("ALTER TABLE task_local ADD COLUMN " + col)
             except Exception:
                 pass
+        # AI agent panel (agent_panel.py): task_local.agent_* + agent_queue / agent_log
+        agent_panel.ensure_agent_schema(conn)
 
 
 def get_setting(conn, key, default=None):
@@ -395,7 +398,7 @@ def load_state_dict():
         ).fetchall()
         sync_state = {r["key"]: r["value"] for r in state_rows}
         account = build_account(sync_state.get("user_json"))
-        return {
+        return agent_panel.decorate_state(conn, {
             "account": account,
             "connected": bool(sync_mod.TOKEN),
             "sync_interval": SYNC_INTERVAL,
@@ -422,7 +425,7 @@ def load_state_dict():
                 "last_pull_error_at": sync_state.get("last_pull_error_at", "") or "",
                 "last_sync_at": sync_state.get("last_sync_at", "") or "",
             },
-        }
+        })
 
 
 def build_completed(cursor=None):

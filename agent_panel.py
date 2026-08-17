@@ -22,6 +22,9 @@ are persisted here (agent_status + agent_decision = undo recipe), so a restart l
 Panel delete is DEFERRED: agent_status="deleted_pending" hides the task from the app's lists
 (decorate_state moves it out of state["tasks"] into state["agent"]["pending_deletes"]); the
 real task_delete runs only when the round closes; undo before that = clear the mark.
+„შესრულდა" (2026-08-17, Kiki's ISSUES A3): a card action that completes the task at once through
+/api/update completed=true (agent_status="completed", undoable = completed=false); the agent
+may propose it with `complete: true` — then it is the card's main button.
 
 Presence: connected = the agent polled GET /api/agent_queue within CONNECT_TTL seconds.
 busy = there is an open (not done) batch AND the agent is connected — the panel is locked
@@ -35,8 +38,8 @@ import uuid
 
 CONNECT_TTL = 60          # seconds since the last agent poll → still "connected"
 LABEL_POSTPONE_RE = re.compile(r"^\(\+(\d+)\)$")   # Todoist label "(+3)" → postpone_count 3
-STATUSES = ("", "proposed", "accepted", "changed", "rejected", "split", "queued", "done", "deleted_pending")
-DECIDED_IN_ROUND = ("accepted", "changed", "split", "deleted_pending")   # shown dimmed until the round closes
+STATUSES = ("", "proposed", "accepted", "changed", "rejected", "split", "queued", "done", "deleted_pending", "completed")
+DECIDED_IN_ROUND = ("accepted", "changed", "split", "deleted_pending", "completed")   # shown dimmed until the round closes
 
 
 def _now():
@@ -98,7 +101,7 @@ def ensure_agent_schema(conn):
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
             at      TEXT,
             task_id TEXT,
-            event   TEXT,                       -- accepted | changed | rejected | undo | queue | done | trigger
+            event   TEXT,                       -- accepted | changed | rejected | completed | undo | queue | done | trigger
             data    TEXT                        -- JSON
         )
     """)
@@ -294,12 +297,16 @@ def _propose(conn, body):
         if not tid or not isinstance(prop, dict):
             continue
         row = conn.execute(
-            "SELECT t.id, p.is_inbox, tl.agent_status FROM tasks t "
+            "SELECT t.id, t.checked, p.is_inbox, tl.agent_status FROM tasks t "
             "LEFT JOIN projects p ON p.id=t.project_id "
             "LEFT JOIN task_local tl ON tl.task_id=t.id WHERE t.id=? AND t.is_deleted=0", (tid,)
         ).fetchone()
         if not row:
             skipped.append({"id": tid, "reason": "not_found"})
+            continue
+        # a completed task has nothing left to triage
+        if row["checked"]:
+            skipped.append({"id": tid, "reason": "completed"})
             continue
         # Tab 2 = Inbox captures only (Lasha, 2026-08-17). Anything else lives on tab 1 (stage 3).
         if not row["is_inbox"]:
@@ -338,7 +345,7 @@ def _status(conn, body):
                   agent_decided_at=None if undo else _now(),
                   agent_decision=None if (undo or not isinstance(dec, dict)) else json.dumps(dec, ensure_ascii=False))
     ev = ("rejected" if status == "deleted_pending"
-          else status if status in ("accepted", "changed", "rejected", "split") else "undo")
+          else status if status in ("accepted", "changed", "rejected", "split", "completed") else "undo")
     _log_event(conn, tid, ev, {
         "status": status,
         "changes": body.get("changes") or None,

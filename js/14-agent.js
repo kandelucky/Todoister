@@ -7,7 +7,7 @@
 // Two tabs, one card shape, one button:
 //   აქტიური        — pinned · overdue · today · tomorrow          (Stage 3)
 //   დაუხარისხებელი — Inbox captures + the agent's proposal          (Stage 1, this file)
-// ვეთანხმები runs immediately through the app's own endpoints, with undo. წაშალე is DEFERRED
+// ვეთანხმები and შესრულდა run immediately through the app's own endpoints, with undo. წაშალე is DEFERRED
 // (agent_status "deleted_pending": hidden from the app's lists, restorable on the card) and
 // becomes a real delete only when the round closes. Agent actions (დაშალე, „?" flag, comment)
 // accumulate and go with „გადაამოწმე (N)" → POST /api/agent_queue → panel locked until the
@@ -26,11 +26,11 @@ let agentInfo = { connected:false, busy:false, name:"", last_seen:"", last_analy
 let agentTab = "triage";           // Stage 1: tab 2 is the built one (tab 1 arrives in Stage 3)
 let agentSentN = 0;                // items in the batch we just sent (for the „მუშავდება" line)
 let _agentWasBusy = false;
-// Per-card session state: id → {decided, kind:'accept'|'delete'|'split', changes, action (undo/redo
+// Per-card session state: id → {decided, kind:'accept'|'complete'|'delete'|'split', changes, action (undo/redo
 // object, rebuilt from the server-side recipe after a restart), prop (edited proposal), comment,
 // cmOpen, flag}. Verdict text is derived (agentVerdict) so a language switch re-renders it.
 const agentUI = {};
-const AGENT_DECIDED = ["accepted", "changed", "split", "deleted_pending"];   // server statuses shown dimmed this round
+const AGENT_DECIDED = ["accepted", "changed", "split", "deleted_pending", "completed"];   // server statuses shown dimmed this round
 /* ---- frozen card order (A1): ids in the order they first appeared; a card keeps its index
    for the whole round, newcomers append, cards that leave the tab are dropped ---- */
 const AGENT_ORDER_KEY = "agent_order";
@@ -90,6 +90,8 @@ const AG_ICO = {
   trash:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>',
   keep:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="9" y1="5" x2="9" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/></svg>',
   edit:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  check:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  done:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
 };
 
 /* ---- shared dropdown: Todoister's .more-popover + .prio-option, every item = icon + text ---- */
@@ -187,7 +189,7 @@ function agentTriageTasks(){
   state.forEach(t => {
     if(t.parent_id) return;
     const ui = agentUI[t.id];
-    if(t.agent_status === "proposed" && t.agent_proposal && t.project === INBOX_NAME) add(t);
+    if(t.agent_status === "proposed" && t.agent_proposal && t.project === INBOX_NAME && !t.completed) add(t);
     else if(decidedThisRound(t)){ agentHydrate(t); add(t); }
     else if(ui && ui.decided && ui.tab === "triage") add(t);          // decision posted, state not back yet
   });
@@ -206,7 +208,7 @@ function agentHydrate(t){
   // yet — do not resurrect it from the stale snapshot
   if(ui.undone && ui.undone === (t.agent_decided_at || "")) return;
   const d = t.agent_decision || {};
-  const kind = d.kind || (t.agent_status === "deleted_pending" ? "delete" : t.agent_status === "split" ? "split" : "accept");
+  const kind = d.kind || (t.agent_status === "deleted_pending" ? "delete" : t.agent_status === "split" ? "split" : t.agent_status === "completed" ? "complete" : "accept");
   const recipe = d.recipe || { changes: d.changes || null };
   if(kind === "delete" && !recipe.text) recipe.text = t.text;
   agentMark(t.id, agentActionFor(t.id, kind, recipe));
@@ -225,6 +227,7 @@ function agentUnmark(id){
 function agentVerdict(ui){
   if(!ui || !ui.decided) return "";
   if(ui.kind === "delete") return tr("agent.verdict_delete_pending");
+  if(ui.kind === "complete") return tr("agent.verdict_completed");
   if(ui.kind === "split") return tr("agent.verdict_split");
   if(ui.changes){ const what = Object.entries(ui.changes).map(([k, v]) => `${k}=${v}`).join(", "); return tr("agent.verdict_changed", {what}); }
   return tr("agent.verdict_accepted");
@@ -232,10 +235,12 @@ function agentVerdict(ui){
 // One undo/redo pair per decision, built from a recipe — the same code path live and after a
 // restart (the recipe is persisted in task_local.agent_decision by /api/agent_status).
 //   accept: {fields:[{field,oldVal,newVal}], subtasks:[text], createdSubs:[id], mergeInto, mergedSub, text, changes, proposal}
-//   delete: {text}     split: {}
+//   complete: {text, proposal}     delete: {text}     split: {}
 function agentActionFor(id, kind, recipe){
   const r = recipe || {};
-  const status = kind === "delete" ? "deleted_pending" : kind === "split" ? "split" : (r.changes ? "changed" : "accepted");
+  const status = kind === "delete" ? "deleted_pending" : kind === "split" ? "split" : kind === "complete" ? "completed" : (r.changes ? "changed" : "accepted");
+  // შესრულდა = the app's own completion (same endpoint as the check circle), nothing else changes
+  const setDone = async v => { const tt = T(id); if(tt) tt.completed = v; await post("/api/update", {id, field: "completed", value: v}); };
   const applyFields = async dir => {
     for(const c of (r.fields || [])){
       const v = dir === "undo" ? c.oldVal : c.newVal;
@@ -259,9 +264,10 @@ function agentActionFor(id, kind, recipe){
   };
   const action = {
     kind, recipe: r,
-    label: kind === "delete" ? (r.text || tr("undo.label_delete")) : kind === "split" ? tr("agent.more_split") : tr("undo.label_agent_accept"),
+    label: kind === "delete" ? (r.text || tr("undo.label_delete")) : kind === "split" ? tr("agent.more_split") : kind === "complete" ? tr("undo.label_completed") : tr("undo.label_agent_accept"),
     undo: async () => {
       agentUnmark(id); render();
+      if(kind === "complete") await setDone(false);
       if(kind === "accept"){
         if(r.mergeInto){ if(r.mergedSub) await post("/api/task_delete", {id: r.mergedSub}); await post("/api/task_restore", {id, subs: []}); }
         for(const sid of (r.createdSubs || [])) await post("/api/task_delete", {id: sid});
@@ -271,6 +277,7 @@ function agentActionFor(id, kind, recipe){
     },
     redo: async () => {
       agentMark(id, action); render();
+      if(kind === "complete") await setDone(true);
       if(kind === "accept"){ await applyFields("redo"); await addSubs(); await doMerge(); }
       await post("/api/agent_status", {id, status, tab: "triage", changes: r.changes || null,
                                         proposal: r.proposal || null, verdict: agentVerdict(agentUI[id]),
@@ -384,6 +391,7 @@ function agentTriageCard(t){
   const hasFile = (t.comments || []).some(c => c.attachment);
   const cm = ui.comment || "", cmOpen = ui.cmOpen || !!cm.trim();
   const done = !!ui.decided;
+  const mainDone = p.complete === true;     // agent proposes completion → შესრულდა is the main button
   return `<div class="kt ${done ? "done" : ""} ${ui.flag ? "flagged" : ""}" id="kt-${t.id}">
     <span class="conf ${conf}" title="${esc(tr("agent.conf_" + conf))}"></span>
     <div class="body">
@@ -400,7 +408,8 @@ function agentTriageCard(t){
       <textarea class="cm ${cmOpen ? "show" : ""}" id="cm-${t.id}" rows="1" placeholder="${esc(tr("agent.comment_ph"))}" oninput="agentCm('${t.id}',this)">${esc(cm)}</textarea>
     </div>
     <div class="acts">
-      <button class="act ok" onclick="agentAccept('${t.id}')">${esc(tr("agent.accept"))}</button>
+      ${mainDone ? `<button class="act ok" onclick="agentComplete('${t.id}')">${esc(tr("agent.complete"))}</button>`
+                 : `<button class="act ok" onclick="agentAccept('${t.id}')">${esc(tr("agent.accept"))}</button>`}
       <button class="act" onclick="event.stopPropagation(); agentMenuMore(this,'${t.id}')">${esc(tr("agent.more"))}${AG_ICO.caret}</button>
     </div>
     <div class="dec"><span>${esc(agentVerdict(ui))}</span><button class="undo" title="${esc(tr("agent.undo"))}" onclick="agentUndo('${t.id}')">${AG_ICO.undo}</button></div>
@@ -544,11 +553,16 @@ function agentToggleLabel(id, l){
 
 /* ---- decisions ---- */
 function agentMenuMore(btn, id){
+  const t = agentTask(id);
+  const mainDone = !!t && agentProposal(t).complete === true;
+  // whichever of ვეთანხმები / შესრულდა is not the main button lives here
   agentMenu(btn, [
+    mainDone ? { label: tr("agent.accept"), ico: "check", fn: () => agentAccept(id) } : null,
     { label: tr("agent.more_edit"),   ico: "edit",  fn: () => agentHintEdit(id) },
+    mainDone ? null : { label: tr("agent.complete"), ico: "done", fn: () => agentComplete(id) },
     { label: tr("agent.more_split"),  ico: "split", fn: () => agentSplit(id) },
     { label: tr("agent.more_delete"), ico: "trash", fn: () => agentDelete(id) },
-  ]);
+  ].filter(Boolean));
 }
 function agentHintEdit(id){
   const p = document.getElementById("ag-prop-" + id);
@@ -578,6 +592,15 @@ async function agentSplit(id){
 async function agentDelete(id){
   const t = agentTask(id); if(!t) return;
   const action = agentActionFor(id, "delete", { text: t.text });
+  await action.redo();
+  recordAction(action);
+}
+// შესრულდა (A3) — the capture is already done: complete the task now (the app's own completion,
+// synced as item_complete), record agent_status "completed" so the agent learns; the card stays
+// in place, dimmed, undoable (completed=false) until the round closes. Nothing else is written.
+async function agentComplete(id){
+  const t = T(id); if(!t || t.completed) return;
+  const action = agentActionFor(id, "complete", { text: t.text, proposal: agentProposal(t) });
   await action.redo();
   recordAction(action);
 }

@@ -166,6 +166,8 @@
   "pill.pending": "{n} pending",
   "pill.pending_title": "Saved locally, not yet sent to Todoist",
   "pill.synced": "synced {time}",
+  "pill.dead": "{n} rejected",
+  "pill.dead_title": "Rejected by Todoist: {msg}\n\nClick to remove from the queue",
 
   "account.open": "Account & sync",
   "account.disconnected": "Not connected",
@@ -186,6 +188,11 @@
   "sync.status_synced": "Synced",
   "sync.status_pending": "{n} pending",
   "sync.status_offline": "Offline",
+  "sync.status_dead": "{n} rejected",
+  "sync.dead_title": "Todoist rejected {n} change(s)",
+  "sync.dead_body": "These changes can no longer be sent — remove them from the queue? Nothing changes in the app.",
+  "sync.dead_note": "Reason: {msg}",
+  "sync.dead_ok": "Remove",
   "disc.title": "Not connected to Todoist",
   "disc.sub": "Connect your Todoist account to load your tasks and projects.",
 
@@ -193,6 +200,7 @@
   "view_toggle.list": "List",
 
   "toast.reconnected": "Reconnected to Todoist — changes sent",
+  "toast.dead_discarded": "{n} rejected change(s) removed from the queue",
   "toast.app_disconnected": "Lost connection to the app ({msg}). Data will not refresh.",
   "toast.save_failed": "Change not saved: {msg}",
   "toast.syncing": "Syncing…",

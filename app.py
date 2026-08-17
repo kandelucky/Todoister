@@ -898,7 +898,7 @@ def background_sync_loop():
             try:
                 with sync_mod.db() as conn:
                     pending = conn.execute(
-                        "SELECT COUNT(*) c FROM pending_ops"
+                        "SELECT COUNT(*) c FROM pending_ops WHERE dead=0"
                     ).fetchone()["c"]
                 if pending > 0:
                     sync_mod.push_queue(verbose=False, quiet=True)

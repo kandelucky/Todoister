@@ -166,6 +166,8 @@
   "pill.pending": "{n} გასაგზავნი",
   "pill.pending_title": "ლოკალურად შენახული, Todoist-ში ჯერ არ გაგზავნილი",
   "pill.synced": "სინქ. {time}",
+  "pill.dead": "{n} უარყოფილი",
+  "pill.dead_title": "Todoist-მა უარყო: {msg}\n\nდააწექი რიგიდან მოსაშორებლად",
 
   "account.open": "ანგარიში და სინქი",
   "account.disconnected": "არ არის დაკავშირებული",
@@ -186,6 +188,11 @@
   "sync.status_synced": "სინქრონიზებულია",
   "sync.status_pending": "{n} გასაგზავნი",
   "sync.status_offline": "ოფლაინი",
+  "sync.status_dead": "{n} უარყოფილი",
+  "sync.dead_title": "Todoist-მა {n} ცვლილება უარყო",
+  "sync.dead_body": "ეს ცვლილებები ვეღარ გაიგზავნება — მოვაშორო რიგიდან? აპლიკაციაში არაფერი იცვლება.",
+  "sync.dead_note": "მიზეზი: {msg}",
+  "sync.dead_ok": "მოაშორე",
   "disc.title": "არ ხარ დაკავშირებული Todoist-თან",
   "disc.sub": "დააკავშირე Todoist ანგარიში, რომ დავალებები და პროექტები ჩაიტვირთოს.",
 
@@ -193,6 +200,7 @@
   "view_toggle.list": "სია",
 
   "toast.reconnected": "Todoist-თან კავშირი აღდგა — ცვლილებები გადაგზავნილია",
+  "toast.dead_discarded": "{n} უარყოფილი ცვლილება მოშორდა რიგიდან",
   "toast.app_disconnected": "აპთან კავშირი დაიკარგა ({msg}). მონაცემები არ განახლდება.",
   "toast.save_failed": "ცვლილება ვერ შენახულია: {msg}",
   "toast.syncing": "სინქრონიზაცია…",

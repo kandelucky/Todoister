@@ -92,7 +92,7 @@ const projColor = p => TODOIST_COLORS[(projectMeta[p] || {}).color] || "var(--te
 let pendingCount = 0;
 let prefs = {};            // UI preferences from /api/state (e.g. nb_fav_dismissed)
 let nbFavChecked = false;  // the notebook-favorite check runs only once per launch
-let syncState = { last_push_error:"", last_pull_error:"", last_sync_at:"" };
+let syncState = { last_push_error:"", last_pull_error:"", last_sync_at:"", dead_count:0, dead_errors:[] };
 let account = { name:"", email:"", avatar_url:"" };  // synced Todoist account
 let connected = true;       // false after disconnect (no token)
 let syncInterval = 30;      // background auto-sync seconds (from /api/state)

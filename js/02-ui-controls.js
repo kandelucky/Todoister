@@ -79,9 +79,29 @@ function syncStatusInfo(){
   if(!connected) return {cls:"err", label:tr("account.disconnected"), val:""};
   const hasErr = !!(syncState.last_push_error || syncState.last_pull_error);
   if(isOffline || hasErr) return {cls:"err", label:tr("sync.status_offline"), val:""};
+  if(syncState.dead_count > 0) return {cls:"err", label:tr("sync.status_dead", {n: syncState.dead_count}), val:""};
   if(pendingCount > 0) return {cls:"warn", label:tr("sync.status_pending", {n: pendingCount}), val:""};
   return {cls:"ok", label:tr("sync.status_synced"),
           val: syncState.last_sync_at ? syncState.last_sync_at.slice(11,16) : ""};
+}
+// Header pill click when Todoist rejected some queued commands for good
+// (pending_ops.dead=1): explain + let the user drop them from the queue.
+async function discardDeadOps(){
+  const n = syncState.dead_count || 0;
+  if(!n) return;
+  const ok = await uiConfirm({
+    title: tr("sync.dead_title", {n}),
+    body: tr("sync.dead_body"),
+    note: tr("sync.dead_note", {msg: (syncState.dead_errors || []).join("; ") || "—"}),
+    ok: tr("sync.dead_ok"),
+  });
+  if(!ok) return;
+  try {
+    const d = await post("/api/sync_discard_dead", {});
+    showToast(tr("toast.dead_discarded", {n: (d && d.discarded) || n}), "ok");
+  } catch(e){
+    showToast(tr("toast.save_failed", {msg: e.message}), "error");
+  }
 }
 function closeSyncPanel(){
   document.getElementById("sync-panel").classList.remove("show");

@@ -165,6 +165,8 @@ def ensure_schema():
                 conn.execute("ALTER TABLE task_local ADD COLUMN " + col)
             except Exception:
                 pass
+        # pending_ops.dead — commands Todoist rejected DEAD_AFTER_ATTEMPTS times (sync.py)
+        sync_mod.ensure_pending_ops_schema(conn)
         # AI agent panel (agent_panel.py): task_local.agent_* + agent_queue / agent_log
         agent_panel.ensure_agent_schema(conn)
 
@@ -441,7 +443,17 @@ def load_state_dict():
         except sqlite3.OperationalError:
             pass
 
-        pending = conn.execute("SELECT COUNT(*) c FROM pending_ops").fetchone()["c"]
+        pending = conn.execute("SELECT COUNT(*) c FROM pending_ops WHERE dead=0").fetchone()["c"]
+        # Commands Todoist rejected for good (sync.apply_sync_status): shown as "rejected"
+        # in the header pill; the user drops them via /api/sync_discard_dead.
+        dead_rows = conn.execute(
+            "SELECT command_type, last_error FROM pending_ops WHERE dead=1 ORDER BY created_at"
+        ).fetchall()
+        dead_errors = []
+        for r in dead_rows:
+            e = (r["last_error"] or "").strip()
+            if e and e not in dead_errors:
+                dead_errors.append(e)
         state_rows = conn.execute(
             "SELECT key, value FROM sync_state WHERE key IN "
             "('last_push_error','last_push_error_at','last_pull_error','last_pull_error_at',"
@@ -476,6 +488,8 @@ def load_state_dict():
                 "last_pull_error": sync_state.get("last_pull_error", "") or "",
                 "last_pull_error_at": sync_state.get("last_pull_error_at", "") or "",
                 "last_sync_at": sync_state.get("last_sync_at", "") or "",
+                "dead_count": len(dead_rows),
+                "dead_errors": dead_errors[:3],
             },
         })
 
@@ -572,11 +586,6 @@ def recurrence_end_date(due_string):
     """The 'ending <date>' / 'until <date>' cap inside a recurrence string, or None."""
     m = END_CLAUSE_RE.search(due_string or "")
     return m.group(1) if m else None
-
-def strip_recurrence_end(due_string):
-    """Remove the 'ending/until <date>' clause from a recurrence string."""
-    return END_CLAUSE_RE.sub("", due_string or "").strip()
-
 
 def task_due_obj(conn, tid):
     """Return Todoist 'due' object for the task (or None)."""

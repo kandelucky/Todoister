@@ -343,6 +343,13 @@ function renderHeader(){
       : tr("pill.manual_sync");
     pill.style.cursor = "pointer";
     pill.onclick = () => manualSync();
+  } else if(syncState.dead_count > 0){
+    // Commands Todoist rejected for good (sync.py dead-letter): red pill, click → drop them.
+    pill.textContent = tr("pill.dead", {n: syncState.dead_count});
+    pill.classList.add("offline");
+    pill.title = tr("pill.dead_title", {msg: (syncState.dead_errors || []).join("; ")});
+    pill.style.cursor = "pointer";
+    pill.onclick = () => discardDeadOps();
   } else if(pendingCount > 0){
     pill.textContent = tr("pill.pending", {n: pendingCount});
     pill.classList.add("has");

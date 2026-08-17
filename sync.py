@@ -237,9 +237,24 @@ CREATE TABLE IF NOT EXISTS pending_ops (
     args_json    TEXT NOT NULL,
     created_at   TEXT NOT NULL,
     attempts     INTEGER DEFAULT 0,
-    last_error   TEXT
+    last_error   TEXT,
+    dead         INTEGER DEFAULT 0
 );
 """
+
+# A pending command that Todoist rejected this many times in a row is given up on
+# (pending_ops.dead=1): it is never sent again, it no longer counts as "pending", and the
+# app shows it as rejected so the user can drop it. Rejections come per command in
+# sync_status (bad argument, item not found, ...) — retrying them forever only clogs the
+# queue and spams the log (seen live 2026-08-16: 4 commands × 600+ attempts).
+DEAD_AFTER_ATTEMPTS = 5
+
+
+def ensure_pending_ops_schema(conn):
+    """Idempotent: add pending_ops.dead to DBs created before it existed."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(pending_ops)").fetchall()]
+    if cols and "dead" not in cols:
+        conn.execute("ALTER TABLE pending_ops ADD COLUMN dead INTEGER DEFAULT 0")
 
 
 def db():
@@ -368,8 +383,9 @@ def _flag_remote_delete(conn, t):
             "SELECT id FROM comments WHERE task_id=? AND is_deleted=0", (t["id"],)
         ).fetchall()]
         stamp = datetime.datetime.now().isoformat(timespec="seconds")
-        # Todoist sends a deleted item as a stub (empty content, placeholder project_id) and
-        # the upsert below overwrites the row with it — keep a snapshot of the real row.
+        # Snapshot of the real row at the moment of deletion (Todoist sends a deleted item
+        # as a stub — empty content, placeholder project_id; upsert_task keeps the row
+        # intact since 2026-08-17, the snapshot stays as the restore source of record).
         snap = json.dumps(dict(row), ensure_ascii=False)
         conn.execute(
             "INSERT INTO task_local(task_id, remote_deleted_at, remote_deleted_comments, remote_deleted_task) "
@@ -386,6 +402,20 @@ def _flag_remote_delete(conn, t):
 
 def upsert_task(conn, t):
     _flag_remote_delete(conn, t)
+    if t.get("is_deleted"):
+        # Todoist sends a deleted item as a stub: empty content, placeholder project_id, no
+        # due/labels. Only mark the local row deleted — never overwrite the real data with
+        # the stub. Keeping the row intact is what makes "restore" (undo of a delete that was
+        # already pushed) possible: task_restore re-adds the task from this row. Seen live
+        # 2026-08-16: stub overwrote the row → restore queued item_add with content ""
+        # → "Invalid argument value" forever, capture lost.
+        cur = conn.execute("SELECT is_deleted FROM tasks WHERE id=?", (t["id"],)).fetchone()
+        if cur is not None:
+            conn.execute(
+                "UPDATE tasks SET is_deleted=1, updated_at=? WHERE id=?",
+                (t.get("updated_at"), t["id"]),
+            )
+            return
     due = t.get("due") or {}
     deadline = t.get("deadline") or {}
     duration = t.get("duration") or {}
@@ -621,7 +651,7 @@ def incremental_sync(quiet=False):
 def fetch_pending(conn, limit=100):
     return conn.execute(
         "SELECT uuid, command_type, args_json FROM pending_ops "
-        "ORDER BY created_at LIMIT ?", (limit,)
+        "WHERE dead=0 ORDER BY created_at LIMIT ?", (limit,)
     ).fetchall()
 
 
@@ -687,9 +717,11 @@ def apply_temp_id_mapping(conn, mapping):
 
 
 def apply_sync_status(conn, status, rows):
-    """Per-command: delete 'ok', mark errors (keep in queue)."""
+    """Per-command: delete 'ok', mark errors (keep in queue); after DEAD_AFTER_ATTEMPTS
+    rejections the command is given up on (dead=1). Returns (pushed, failed, dead)."""
     pushed = 0
     failed = 0
+    dead = 0
     for r in rows:
         st = status.get(r["uuid"])
         if st == "ok":
@@ -702,8 +734,15 @@ def apply_sync_status(conn, status, rows):
                 (err, r["uuid"])
             )
             failed += 1
+            n = conn.execute(
+                "SELECT attempts FROM pending_ops WHERE uuid=?", (r["uuid"],)
+            ).fetchone()
+            if n and n["attempts"] >= DEAD_AFTER_ATTEMPTS:
+                conn.execute("UPDATE pending_ops SET dead=1 WHERE uuid=?", (r["uuid"],))
+                dead += 1
+                print(f"[push] ✖ gave up on {r['command_type']} after {n['attempts']} attempts: {err}")
         # if status missing → unknown, leave alone (will retry)
-    return pushed, failed
+    return pushed, failed, dead
 
 
 def push_queue(verbose=True, quiet=False):
@@ -713,6 +752,9 @@ def push_queue(verbose=True, quiet=False):
     total_pushed = 0
     total_failed = 0
     rounds = 0
+    with db() as conn:
+        ensure_pending_ops_schema(conn)
+        conn.commit()
     while True:
         rounds += 1
         with db() as conn:
@@ -741,7 +783,7 @@ def push_queue(verbose=True, quiet=False):
 
         with db() as conn:
             n_map = apply_temp_id_mapping(conn, resp.get("temp_id_mapping", {}))
-            ok, fail = apply_sync_status(conn, resp.get("sync_status", {}), rows)
+            ok, fail, gave_up = apply_sync_status(conn, resp.get("sync_status", {}), rows)
             # Pull-side: server returned changed items along with our response
             counts = apply_resp(conn, resp)
             conn.commit()
@@ -754,6 +796,9 @@ def push_queue(verbose=True, quiet=False):
                   f"P{counts['projects']}/S{counts['sections']}/T{counts['tasks']}/L{counts['labels']}/C{counts['comments']}/R{counts['reminders']}")
 
         if fail > 0:
+            if gave_up:
+                print(f"[push] ✖ {gave_up} command(s) moved to dead-letter (pending_ops.dead=1) — "
+                      f"the app shows them as rejected")
             print(f"[push] ⚠ {fail} command(s) failed — check pending_ops.last_error; loop stops")
             break
         if ok == 0:
@@ -770,18 +815,22 @@ def show_queue():
         print(f"[queue] DB not found")
         return
     with db() as conn:
+        ensure_pending_ops_schema(conn)
         rows = conn.execute(
-            "SELECT command_type, args_json, created_at, attempts, last_error "
-            "FROM pending_ops ORDER BY created_at"
+            "SELECT command_type, args_json, created_at, attempts, last_error, dead "
+            "FROM pending_ops ORDER BY dead, created_at"
         ).fetchall()
         if not rows:
             print("Queue: empty ✓")
             return
-        print(f"Queue: {len(rows)} command(s)")
+        live = [r for r in rows if not r["dead"]]
+        dead = [r for r in rows if r["dead"]]
+        print(f"Queue: {len(live)} command(s)" + (f" + {len(dead)} dead (given up)" if dead else ""))
         for r in rows:
             ar = r["args_json"][:80]
             err = f"   [err×{r['attempts']}: {r['last_error']}]" if r["last_error"] else ""
-            print(f"  {(r['created_at'] or '?')[11:19]} {r['command_type']:<18} {ar}{err}")
+            mark = "✖ " if r["dead"] else "  "
+            print(f"{mark}{(r['created_at'] or '?')[11:19]} {r['command_type']:<18} {ar}{err}")
 
 
 # ============ STATUS ============

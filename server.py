@@ -44,7 +44,7 @@ from store import (
     TZ_HELP_URL, PRIO_TD_TO_UI, PRIO_UI_TO_TD, now, build_account, db,
     ensure_schema, get_setting, set_setting, log_action, split_due,
     load_state_dict, build_completed, lookup_project_id, lookup_section_id,
-    short_title, now_iso, recurrence_end_date, strip_recurrence_end,
+    short_title, now_iso, recurrence_end_date,
     task_due_obj, queue_cmd, cancel_pending_for, has_pending_add,
     build_item_add_args, has_pending_reminder_add, cancel_pending_reminder_for,
 )
@@ -795,6 +795,17 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/agent_"):
             # AI agent panel endpoints live in agent_panel.py (returns True / dict / False)
             return agent_panel.handle_post(conn, path, body)
+
+        if path == "/api/sync_discard_dead":
+            # Drop the commands Todoist rejected for good (pending_ops.dead=1, see
+            # sync.apply_sync_status). The local rows stay as they are; nothing is sent.
+            rows = conn.execute(
+                "SELECT command_type, last_error FROM pending_ops WHERE dead=1"
+            ).fetchall()
+            conn.execute("DELETE FROM pending_ops WHERE dead=1")
+            log_action(f"[{now()}] dropped {len(rows)} rejected command(s): "
+                       + ", ".join(f"{r['command_type']} ({r['last_error']})" for r in rows))
+            return {"discarded": len(rows)}
 
         if path == "/api/update" and tid:
             return self._update_field(conn, tid, short, body.get("field"), body.get("value"))
@@ -1653,15 +1664,17 @@ class Handler(BaseHTTPRequestHandler):
             # time embedded in due_date (the shape Todoist sends), not just due_datetime.
             cur = conn.execute("SELECT due_date, due_datetime FROM tasks WHERE id=?", (tid,)).fetchone()
             _, cur_time = split_due(cur["due_date"], cur["due_datetime"]) if cur else ("", "")
-            # If the task moves to a date AFTER the recurrence's "ending" cap, that cap
-            # is now unreachable (the repeat would silently die). Drop it so the
-            # recurrence keeps working — chosen behaviour over leaving a dead end date.
+            # A recurrence with an "ending <date>" cap is over once the task moves to a
+            # date AFTER that cap: the task becomes a plain dated task (due_string cleared →
+            # task_due_obj sends only the date, Todoist drops the repeat). Until 2026-08-17
+            # the cap was stripped and the repeat kept — that revived dead recurrences
+            # ("every day ending 2026-06-25" moved to August became "every day" forever).
             if value:
                 cur_str = conn.execute("SELECT due_string FROM tasks WHERE id=?", (tid,)).fetchone()
                 end = recurrence_end_date(cur_str["due_string"]) if cur_str else None
                 if end and value > end:
-                    new_str = strip_recurrence_end(cur_str["due_string"])
-                    conn.execute("UPDATE tasks SET due_string=? WHERE id=?", (new_str or None, tid))
+                    conn.execute("UPDATE tasks SET due_string=NULL, due_is_recurring=0 WHERE id=?", (tid,))
+                    log_action(f"[{now()}] {tid} «{short}» recurrence ended ({cur_str['due_string']}) → plain date")
             if not value:
                 # Clearing the date also drops any recurrence (matches Todoist).
                 conn.execute("UPDATE tasks SET due_date=NULL, due_datetime=NULL, "

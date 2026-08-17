@@ -14,6 +14,14 @@ What lives here
   - state:   decorate_state()  → per-task agent fields + global state["agent"]
   - GET      /api/agent_queue  → the agent's poll (= heartbeat = "connected")
   - POST     /api/agent_propose · agent_status · agent_queue · agent_done · agent_trigger
+             · agent_round_close
+
+Round (2026-08-17, Kiki's ISSUES A1/A2): a card the user decided stays on tab 2, dimmed, in
+its place, until the round is closed (the „გადაამოწმე (N)" / „დაასრულე" button). Decisions
+are persisted here (agent_status + agent_decision = undo recipe), so a restart loses nothing.
+Panel delete is DEFERRED: agent_status="deleted_pending" hides the task from the app's lists
+(decorate_state moves it out of state["tasks"] into state["agent"]["pending_deletes"]); the
+real task_delete runs only when the round closes; undo before that = clear the mark.
 
 Presence: connected = the agent polled GET /api/agent_queue within CONNECT_TTL seconds.
 busy = there is an open (not done) batch AND the agent is connected — the panel is locked
@@ -27,11 +35,14 @@ import uuid
 
 CONNECT_TTL = 60          # seconds since the last agent poll → still "connected"
 LABEL_POSTPONE_RE = re.compile(r"^\(\+(\d+)\)$")   # Todoist label "(+3)" → postpone_count 3
-STATUSES = ("", "proposed", "accepted", "changed", "rejected", "split", "queued", "done")
+STATUSES = ("", "proposed", "accepted", "changed", "rejected", "split", "queued", "done", "deleted_pending")
+DECIDED_IN_ROUND = ("accepted", "changed", "split", "deleted_pending")   # shown dimmed until the round closes
 
 
 def _now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
+    # milliseconds: "decided in this round" = agent_decided_at > agent_round_closed_at (string
+    # compare) — a decision and a round close must never share one timestamp
+    return datetime.datetime.now().isoformat(timespec="milliseconds")
 
 
 def _log(line):
@@ -58,7 +69,8 @@ def _set(conn, key, value):
 # ---------------------------------------------------------------- schema
 def ensure_agent_schema(conn):
     """Idempotent. Called from store.ensure_schema()."""
-    for col in ("agent_proposal TEXT", "agent_status TEXT DEFAULT ''", "agent_decided_at TEXT"):
+    for col in ("agent_proposal TEXT", "agent_status TEXT DEFAULT ''", "agent_decided_at TEXT",
+                "agent_decision TEXT"):      # JSON {kind, changes, recipe} — the panel's undo recipe
         try:
             conn.execute("ALTER TABLE task_local ADD COLUMN " + col)
         except Exception:
@@ -77,6 +89,10 @@ def ensure_agent_schema(conn):
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_queue_status ON agent_queue(status)")
+    # First start with rounds: decisions made before this moment belong to no open round
+    # (otherwise every card ever accepted would come back dimmed on tab 2).
+    if not _setting(conn, "agent_round_closed_at", ""):
+        _set(conn, "agent_round_closed_at", _now())
     conn.execute("""
         CREATE TABLE IF NOT EXISTS agent_log (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,6 +138,7 @@ def agent_state(conn):
         "queued": conn.execute(
             "SELECT COUNT(*) c FROM agent_queue WHERE status!='done'"
         ).fetchone()["c"],
+        "round_closed_at": _setting(conn, "agent_round_closed_at", ""),
     }
 
 
@@ -141,25 +158,36 @@ def decorate_state(conn, state):
     rows = {}
     try:
         for r in conn.execute(
-            "SELECT task_id, agent_proposal, agent_status, agent_decided_at FROM task_local "
+            "SELECT task_id, agent_proposal, agent_status, agent_decided_at, agent_decision FROM task_local "
             "WHERE (agent_status IS NOT NULL AND agent_status!='') OR agent_proposal IS NOT NULL"
         ).fetchall():
             rows[r["task_id"]] = r
     except Exception:
         rows = {}
+    keep, pending_deletes = [], []
     for t in state.get("tasks", []):
         r = rows.get(t["id"])
-        prop = None
+        prop = dec = None
         if r and r["agent_proposal"]:
             try:
                 prop = json.loads(r["agent_proposal"])
             except Exception:
                 prop = None
+        if r and r["agent_decision"]:
+            try:
+                dec = json.loads(r["agent_decision"])
+            except Exception:
+                dec = None
         t["agent_status"] = (r["agent_status"] or "") if r else ""
         t["agent_proposal"] = prop
         t["agent_decided_at"] = (r["agent_decided_at"] or "") if r else ""
+        t["agent_decision"] = dec
         t["postpone_count"] = postpone_count(t.get("chosen_labels"))
+        # deferred panel delete: hidden from every ordinary view, visible only to the panel
+        (pending_deletes if t["agent_status"] == "deleted_pending" else keep).append(t)
+    state["tasks"] = keep
     state["agent"] = agent_state(conn)
+    state["agent"]["pending_deletes"] = pending_deletes
     return state
 
 
@@ -243,6 +271,8 @@ def handle_post(conn, path, body):
         return _enqueue(conn, body)
     if path == "/api/agent_done":
         return _done(conn, body)
+    if path == "/api/agent_round_close":
+        return _round_close(conn, body)
     if path == "/api/agent_trigger":
         _set(conn, "agent_trigger_at", _now())
         _log_event(conn, "", "trigger", {})
@@ -257,45 +287,104 @@ def _propose(conn, body):
     if not isinstance(items, list):
         items = [{"id": body.get("id"), "proposal": body.get("proposal")}]
     agent = (body.get("agent") or "").strip()
-    n = 0
+    n, skipped = 0, []
     for it in items:
         tid = (it or {}).get("id")
         prop = (it or {}).get("proposal")
         if not tid or not isinstance(prop, dict):
             continue
-        if not conn.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone():
+        row = conn.execute(
+            "SELECT t.id, p.is_inbox, tl.agent_status FROM tasks t "
+            "LEFT JOIN projects p ON p.id=t.project_id "
+            "LEFT JOIN task_local tl ON tl.task_id=t.id WHERE t.id=? AND t.is_deleted=0", (tid,)
+        ).fetchone()
+        if not row:
+            skipped.append({"id": tid, "reason": "not_found"})
+            continue
+        # Tab 2 = Inbox captures only (Lasha, 2026-08-17). Anything else lives on tab 1 (stage 3).
+        if not row["is_inbox"]:
+            skipped.append({"id": tid, "reason": "not_inbox"})
+            continue
+        # a task the user marked for deletion stays hidden until the round closes — no new card
+        if (row["agent_status"] or "") == "deleted_pending":
+            skipped.append({"id": tid, "reason": "deleted_pending"})
             continue
         prop.setdefault("made_at", _now())
         _upsert_local(conn, tid, agent_proposal=json.dumps(prop, ensure_ascii=False),
-                      agent_status="proposed", agent_decided_at=None)
+                      agent_status="proposed", agent_decided_at=None, agent_decision=None)
         n += 1
     if n:
         _set(conn, "agent_last_analysis", _now())
         _set(conn, "agent_last_seen", _now())
         if agent:
             _set(conn, "agent_name", agent)
-    _log(f"{n} proposal(s) written")
-    return {"proposed": n}
+    _log(f"{n} proposal(s) written" + (f", {len(skipped)} skipped" if skipped else ""))
+    return {"proposed": n, "skipped": skipped}
 
 
 def _status(conn, body):
-    """Panel → after a standard action: {id, status, changes?, verdict?}. status "" or
-    "proposed" = undo. Everything is logged for the agent."""
+    """Panel → after a decision: {id, status, changes?, verdict?, decision?, proposal?}.
+    status "" or "proposed" = undo (decision cleared). `decision` = {kind, changes, recipe}
+    — the panel's own undo recipe, persisted so a decided card survives a restart until the
+    round closes. `proposal` = the proposal in effect (the user's edited copy on "changed").
+    Everything is logged for the agent."""
     tid = body.get("id")
     status = body.get("status") or ""
     if not tid or status not in STATUSES:
         return False
+    undo = status in ("", "proposed")
+    dec = body.get("decision")
     _upsert_local(conn, tid, agent_status=status,
-                  agent_decided_at=_now() if status not in ("", "proposed") else None)
-    ev = status if status in ("accepted", "changed", "rejected", "split") else "undo"
+                  agent_decided_at=None if undo else _now(),
+                  agent_decision=None if (undo or not isinstance(dec, dict)) else json.dumps(dec, ensure_ascii=False))
+    ev = ("rejected" if status == "deleted_pending"
+          else status if status in ("accepted", "changed", "rejected", "split") else "undo")
     _log_event(conn, tid, ev, {
         "status": status,
         "changes": body.get("changes") or None,
+        "proposal": body.get("proposal") if isinstance(body.get("proposal"), dict) else None,
         "verdict": body.get("verdict") or "",
         "tab": body.get("tab") or "",
     })
     _log(f"{tid} → {status or 'cleared'}")
     return True
+
+
+def _delete_task(conn, tid):
+    """Same soft delete as server.py /api/task_delete (task + open subtasks, sync op queued
+    or the pending add cancelled). Returns the ids it hid — task_restore takes them back."""
+    from store import queue_cmd, has_pending_add, cancel_pending_for, now_iso   # lazy: store imports us
+    ids = [tid] + [r["id"] for r in conn.execute(
+        "SELECT id FROM tasks WHERE parent_id=? AND is_deleted=0", (tid,)).fetchall()]
+    for i in ids:
+        conn.execute("UPDATE tasks SET is_deleted=1, updated_at=? WHERE id=?", (now_iso(), i))
+        if has_pending_add(conn, i):
+            cancel_pending_for(conn, i)
+        else:
+            queue_cmd(conn, "item_delete", {"id": i})
+    return ids
+
+
+def _round_close(conn, body):
+    """Panel → the round is over („გადაამოწმე (N)" sent, or „დაასრულე"): every deferred
+    delete becomes a real task_delete (status → rejected), and agent_round_closed_at moves
+    to now, so cards decided before this moment leave tab 2. Returns what was deleted
+    (id + subtask ids) so the panel can offer one undo for the whole close."""
+    rows = conn.execute(
+        "SELECT tl.task_id, t.content FROM task_local tl JOIN tasks t ON t.id=tl.task_id "
+        "WHERE tl.agent_status='deleted_pending' AND t.is_deleted=0"
+    ).fetchall()
+    deleted = []
+    for r in rows:
+        ids = _delete_task(conn, r["task_id"])
+        _upsert_local(conn, r["task_id"], agent_status="rejected", agent_decided_at=_now(), agent_decision=None)
+        deleted.append({"id": r["task_id"], "subs": ids[1:], "text": r["content"] or ""})
+        _log_event(conn, r["task_id"], "deleted", {"status": "rejected", "subs": ids[1:]})
+    ts = _now()
+    _set(conn, "agent_round_closed_at", ts)
+    _log_event(conn, "", "round_close", {"deleted": [d["id"] for d in deleted]})
+    _log(f"round closed — {len(deleted)} deferred delete(s) executed")
+    return {"deleted": deleted, "closed_at": ts}
 
 
 def _enqueue(conn, body):

@@ -7,18 +7,46 @@
 // Two tabs, one card shape, one button:
 //   აქტიური        — pinned · overdue · today · tomorrow          (Stage 3)
 //   დაუხარისხებელი — Inbox captures + the agent's proposal          (Stage 1, this file)
-// Standard actions (ვეთანხმები / წაშალე) run immediately through the app's own
-// endpoints, with undo. Agent actions (დაშალე, „?" flag, comment) accumulate and go with
-// „გადაამოწმე (N)" → POST /api/agent_queue → panel locked until the agent posts agent_done.
+// ვეთანხმები runs immediately through the app's own endpoints, with undo. წაშალე is DEFERRED
+// (agent_status "deleted_pending": hidden from the app's lists, restorable on the card) and
+// becomes a real delete only when the round closes. Agent actions (დაშალე, „?" flag, comment)
+// accumulate and go with „გადაამოწმე (N)" → POST /api/agent_queue → panel locked until the
+// agent posts agent_done. „გადაამოწმე (N)" (or „დაასრულე" when nothing is to send) closes the
+// round: POST /api/agent_round_close → deferred deletes run, decided cards leave the tab.
 // No agent connected → the sidebar item is disabled; the queue waits in the DB.
+//
+// Round rules (Kiki's ISSUES-2026-08-17 A1/A2, Lasha): a card never moves after a decision —
+// the order is frozen when it first shows (localStorage) and new proposals append at the end;
+// a decided card stays in place, dimmed, with its verdict + undo, until the round closes.
+// Decisions live server-side (task_local.agent_status + agent_decision = undo recipe), so a
+// restart loses nothing; only unsent comment/flag drafts sit in localStorage.
 
-let agentInfo = { connected:false, busy:false, name:"", last_seen:"", last_analysis:"", open_batches:[], queued:0 };
+let agentInfo = { connected:false, busy:false, name:"", last_seen:"", last_analysis:"", open_batches:[], queued:0,
+                  pending_deletes:[], round_closed_at:"" };
 let agentTab = "triage";           // Stage 1: tab 2 is the built one (tab 1 arrives in Stage 3)
 let agentSentN = 0;                // items in the batch we just sent (for the „მუშავდება" line)
 let _agentWasBusy = false;
-// Per-card session state: id → {decided, verdict, kind:'accept'|'delete'|'split', action (undo/redo
-// object), prop (edited proposal), changes, comment, cmOpen, flag, snap (task snapshot for deleted)}
+// Per-card session state: id → {decided, kind:'accept'|'delete'|'split', changes, action (undo/redo
+// object, rebuilt from the server-side recipe after a restart), prop (edited proposal), comment,
+// cmOpen, flag}. Verdict text is derived (agentVerdict) so a language switch re-renders it.
 const agentUI = {};
+const AGENT_DECIDED = ["accepted", "changed", "split", "deleted_pending"];   // server statuses shown dimmed this round
+/* ---- frozen card order (A1): ids in the order they first appeared; a card keeps its index
+   for the whole round, newcomers append, cards that leave the tab are dropped ---- */
+const AGENT_ORDER_KEY = "agent_order";
+let agentOrder = [];
+try { agentOrder = JSON.parse(localStorage.getItem(AGENT_ORDER_KEY) || "[]"); if(!Array.isArray(agentOrder)) agentOrder = []; } catch(_){ agentOrder = []; }
+function agentOrdered(pool){
+  const idx = new Map(agentOrder.map((id, i) => [id, i]));
+  const known = pool.filter(t => idx.has(t.id)).sort((a, b) => idx.get(a.id) - idx.get(b.id));
+  const out = known.concat(pool.filter(t => !idx.has(t.id)));
+  const ids = out.map(t => t.id);
+  if(JSON.stringify(ids) !== JSON.stringify(agentOrder)){
+    agentOrder = ids;
+    try { if(ids.length) localStorage.setItem(AGENT_ORDER_KEY, JSON.stringify(ids)); else localStorage.removeItem(AGENT_ORDER_KEY); } catch(_){}
+  }
+  return out;
+}
 /* ---- unsent drafts (comment text · flag) survive a restart — browser localStorage (Lasha's
    decision 1). Nothing real lives here: the panel only marks tasks that already exist + sync. ---- */
 const AGENT_DRAFTS_KEY = "agent_drafts";
@@ -146,24 +174,111 @@ async function agentReanalyse(){
 }
 
 /* ---- data ---- */
-// Tab 2 = tasks that carry a proposal awaiting a decision (+ the ones decided this session,
-// kept on screen dimmed with their verdict + undo until the round is sent / the view reloads).
+// Tab 2 = Inbox captures that carry a proposal awaiting a decision (A4: Inbox only — anything
+// else belongs to tab 1) + the cards decided in the current round (server: status in
+// AGENT_DECIDED and decided after the last round close), kept in place, dimmed, with verdict +
+// undo. Tasks marked for deferred deletion are not in `state` (hidden from the app) — they
+// arrive as agentInfo.pending_deletes. Order = frozen (agentOrdered).
 function agentTriageTasks(){
-  const out = [];
+  const closed = agentInfo.round_closed_at || "";
+  const decidedThisRound = t => AGENT_DECIDED.includes(t.agent_status) && (t.agent_decided_at || "") > closed;
+  const seen = new Set(), pool = [];
+  const add = t => { if(!seen.has(t.id)){ seen.add(t.id); pool.push(t); } };
   state.forEach(t => {
     if(t.parent_id) return;
     const ui = agentUI[t.id];
-    if(t.agent_status === "proposed" && t.agent_proposal) out.push(t);
-    else if(ui && ui.decided && ui.tab === "triage") out.push(t);
+    if(t.agent_status === "proposed" && t.agent_proposal && t.project === INBOX_NAME) add(t);
+    else if(decidedThisRound(t)){ agentHydrate(t); add(t); }
+    else if(ui && ui.decided && ui.tab === "triage") add(t);          // decision posted, state not back yet
   });
-  // deleted this session (no longer in state) — render from the snapshot
-  Object.keys(agentUI).forEach(id => {
-    const ui = agentUI[id];
-    if(ui.decided && ui.tab === "triage" && ui.snap && !T(id)) out.push(ui.snap);
-  });
-  return out;
+  (agentInfo.pending_deletes || []).forEach(t => { agentHydrate(t); add(t); });
+  return agentOrdered(pool);
 }
+function agentPendingDelete(id){ return (agentInfo.pending_deletes || []).find(t => t.id === id); }
+function agentTask(id){ return T(id) || agentPendingDelete(id); }
 function agentUiFor(id){ return agentUI[id] || (agentUI[id] = { tab:"triage" }); }
+// A card decided in an earlier session (or before a reload): rebuild its session state from the
+// server-side decision {kind, changes, recipe} so the verdict shows and undo works.
+function agentHydrate(t){
+  const ui = agentUiFor(t.id);
+  if(ui.decided) return;
+  // the user just undid exactly this decision (same decided_at) and the state is not back
+  // yet — do not resurrect it from the stale snapshot
+  if(ui.undone && ui.undone === (t.agent_decided_at || "")) return;
+  const d = t.agent_decision || {};
+  const kind = d.kind || (t.agent_status === "deleted_pending" ? "delete" : t.agent_status === "split" ? "split" : "accept");
+  const recipe = d.recipe || { changes: d.changes || null };
+  if(kind === "delete" && !recipe.text) recipe.text = t.text;
+  agentMark(t.id, agentActionFor(t.id, kind, recipe));
+}
+function agentMark(id, action){
+  const ui = agentUiFor(id);
+  ui.decided = true; ui.kind = action.kind; ui.changes = (action.recipe && action.recipe.changes) || null; ui.action = action;
+  ui.undone = "";
+}
+function agentUnmark(id){
+  const ui = agentUI[id]; if(!ui) return;
+  const t = agentTask(id);
+  ui.undone = (t && t.agent_decided_at) || "";     // guard for agentHydrate until the server confirms
+  ui.decided = false; ui.kind = ""; ui.changes = null; ui.action = null;
+}
+function agentVerdict(ui){
+  if(!ui || !ui.decided) return "";
+  if(ui.kind === "delete") return tr("agent.verdict_delete_pending");
+  if(ui.kind === "split") return tr("agent.verdict_split");
+  if(ui.changes){ const what = Object.entries(ui.changes).map(([k, v]) => `${k}=${v}`).join(", "); return tr("agent.verdict_changed", {what}); }
+  return tr("agent.verdict_accepted");
+}
+// One undo/redo pair per decision, built from a recipe — the same code path live and after a
+// restart (the recipe is persisted in task_local.agent_decision by /api/agent_status).
+//   accept: {fields:[{field,oldVal,newVal}], subtasks:[text], createdSubs:[id], mergeInto, mergedSub, text, changes, proposal}
+//   delete: {text}     split: {}
+function agentActionFor(id, kind, recipe){
+  const r = recipe || {};
+  const status = kind === "delete" ? "deleted_pending" : kind === "split" ? "split" : (r.changes ? "changed" : "accepted");
+  const applyFields = async dir => {
+    for(const c of (r.fields || [])){
+      const v = dir === "undo" ? c.oldVal : c.newVal;
+      const tt = T(id); if(tt) tt[c.field] = v;
+      await post("/api/update", {id, field: c.field, value: v});
+    }
+  };
+  const addSubs = async () => {
+    r.createdSubs = [];
+    const before = new Set(((T(id) || {}).subtasks || []).map(x => x.id));
+    for(const txt of (r.subtasks || [])) await post("/api/subtask_add", {id, text: txt});
+    r.createdSubs = ((T(id) || {}).subtasks || []).map(x => x.id).filter(x => !before.has(x));
+  };
+  const doMerge = async () => {
+    r.mergedSub = "";
+    if(!r.mergeInto || !T(r.mergeInto)) return;
+    const before = new Set(((T(r.mergeInto) || {}).subtasks || []).map(x => x.id));
+    await post("/api/subtask_add", {id: r.mergeInto, text: r.text || ""});
+    r.mergedSub = (((T(r.mergeInto) || {}).subtasks || []).map(x => x.id).find(x => !before.has(x))) || "";
+    await post("/api/task_delete", {id});
+  };
+  const action = {
+    kind, recipe: r,
+    label: kind === "delete" ? (r.text || tr("undo.label_delete")) : kind === "split" ? tr("agent.more_split") : tr("undo.label_agent_accept"),
+    undo: async () => {
+      agentUnmark(id); render();
+      if(kind === "accept"){
+        if(r.mergeInto){ if(r.mergedSub) await post("/api/task_delete", {id: r.mergedSub}); await post("/api/task_restore", {id, subs: []}); }
+        for(const sid of (r.createdSubs || [])) await post("/api/task_delete", {id: sid});
+        await applyFields("undo");
+      }
+      await post("/api/agent_status", {id, status: "proposed", tab: "triage"});
+    },
+    redo: async () => {
+      agentMark(id, action); render();
+      if(kind === "accept"){ await applyFields("redo"); await addSubs(); await doMerge(); }
+      await post("/api/agent_status", {id, status, tab: "triage", changes: r.changes || null,
+                                        proposal: r.proposal || null, verdict: agentVerdict(agentUI[id]),
+                                        decision: {kind, changes: r.changes || null, recipe: r}});
+    },
+  };
+  return action;
+}
 // The proposal in effect for a card: the user's edited copy if any, else the agent's original.
 function agentProposal(t){
   const ui = agentUI[t.id];
@@ -220,12 +335,11 @@ function renderAgentPanel(row){
   // drafts left over from tasks that no longer carry a proposal (decided elsewhere) → drop
   Object.keys(agentUI).forEach(id => {
     const ui = agentUI[id];
-    if(!ui.decided && !ui.snap && !triage.some(t => t.id === id)){ delete agentUI[id]; }
+    if(!ui.decided && !triage.some(t => t.id === id)){ delete agentUI[id]; }
   });
   agentDraftsSave();
   const nTri = triage.filter(t => !(agentUI[t.id] && agentUI[t.id].decided)).length;
-  const items = agentItemsToSend();
-  const n = items.active.length + items.triage.length;
+  const f = agentFooterInfo(triage);
   let body;
   if(agentInfo.busy){
     body = `<div class="kp-proc" id="kp-proc"><b><span class="spin"></span>${esc(tr("agent.processing"))}</b>${esc(tr("agent.processing_sub", {n: agentSentN || agentInfo.queued || 0}))}</div>`;
@@ -236,10 +350,9 @@ function renderAgentPanel(row){
            <div id="kp-cards">${triage.length ? triage.map(agentTriageCard).join("") : `<div class="kp-empty">${esc(tr("agent.empty_triage"))}</div>`}</div>
          </section>`
       : `<section class="kp-pane" id="pane-active"><div id="kt-list"><div class="kp-empty">${esc(tr("agent.empty_active"))}</div></div></section>`;
-    const summary = tr("agent.summary", {n}) + (n ? tr("agent.summary_split", {a: items.active.length, t: items.triage.length}) : "");
     body = pane + `<div class="kp-submit" id="kp-footer">
-        <span id="kp-summary">${esc(summary)}</span>
-        <button class="kp-send" id="kp-send" onclick="agentSend()" ${n ? "" : "disabled"}>${esc(tr("agent.recheck", {n}))}</button>
+        <span id="kp-summary">${esc(f.summary)}</span>
+        <button class="kp-send" id="kp-send" onclick="agentSend()" ${f.disabled ? "disabled" : ""}>${esc(f.label)}</button>
       </div>`;
   }
   row.innerHTML = `<div class="list-wrap kp-wrap">
@@ -290,7 +403,7 @@ function agentTriageCard(t){
       <button class="act ok" onclick="agentAccept('${t.id}')">${esc(tr("agent.accept"))}</button>
       <button class="act" onclick="event.stopPropagation(); agentMenuMore(this,'${t.id}')">${esc(tr("agent.more"))}${AG_ICO.caret}</button>
     </div>
-    <div class="dec"><span>${esc(ui.verdict || "")}</span><button class="undo" title="${esc(tr("agent.undo"))}" onclick="agentUndo('${t.id}')">${AG_ICO.undo}</button></div>
+    <div class="dec"><span>${esc(agentVerdict(ui))}</span><button class="undo" title="${esc(tr("agent.undo"))}" onclick="agentUndo('${t.id}')">${AG_ICO.undo}</button></div>
     <button class="ic cmt ${cmOpen ? "on" : ""}" id="ic-${t.id}" title="${esc(tr("agent.comment"))}" onclick="agentCmToggle('${t.id}')">${AG_ICO.cmt}</button>
     <button class="ic flag ${ui.flag ? "on" : ""}" id="fl-${t.id}" title="${esc(tr("agent.flag"))}" onclick="agentFlag('${t.id}')">${AG_ICO.flag}</button>
   </div>`;
@@ -320,11 +433,23 @@ function agentFlag(id){
   agentRefreshFooter();
   agentRenderNav();
 }
-function agentRefreshFooter(){
+// The one button: „გადაამოწმე (N)" when something goes to the agent; „დაასრულე" when only
+// decisions (accept / deferred delete) wait for the round to close; disabled when neither.
+function agentFooterInfo(triage){
   const items = agentItemsToSend(); const n = items.active.length + items.triage.length;
+  const decided = (triage || agentTriageTasks()).filter(t => agentUI[t.id] && agentUI[t.id].decided).length;
+  const dels = (agentInfo.pending_deletes || []).length;
+  let summary = tr("agent.summary", {n}) + (n ? tr("agent.summary_split", {a: items.active.length, t: items.triage.length}) : "");
+  if(dels) summary += tr("agent.summary_deletes", {n: dels});
+  return { items, n, decided, dels, summary,
+           label: n ? tr("agent.recheck", {n}) : decided ? tr("agent.finish") : tr("agent.recheck", {n: 0}),
+           disabled: !n && !decided };
+}
+function agentRefreshFooter(){
+  const f = agentFooterInfo();
   const s = document.getElementById("kp-summary"), b = document.getElementById("kp-send");
-  if(s) s.textContent = tr("agent.summary", {n}) + (n ? tr("agent.summary_split", {a: items.active.length, t: items.triage.length}) : "");
-  if(b){ b.textContent = tr("agent.recheck", {n}); b.disabled = n === 0; }
+  if(s) s.textContent = f.summary;
+  if(b){ b.textContent = f.label; b.disabled = f.disabled; }
 }
 
 /* ---- proposal chips → Todoister's own pickers (callbacks edit the proposal, not the task) ---- */
@@ -431,45 +556,35 @@ function agentHintEdit(id){
   showToast(tr("agent.edit_hint"), "ok", 4000);
 }
 // A card-level undo unwinds exactly that card's action (and drops it from the global undo stack).
-function agentUndo(id){
+// The action's own undo clears the mark + the server status (comment / flag / edits survive).
+async function agentUndo(id){
   const ui = agentUI[id]; if(!ui || !ui.decided) return;
   if(ui.action){
     const i = undoStack.indexOf(ui.action); if(i >= 0){ undoStack.splice(i, 1); updateUndoButtons(); }
-    ui.action.undo();
-    post("/api/agent_status", {id, status: "proposed", tab: "triage"});
+    await ui.action.undo();
+  } else {
+    agentUnmark(id); render();
+    await post("/api/agent_status", {id, status: "proposed", tab: "triage"});
   }
-  const keep = { comment: ui.comment, cmOpen: ui.cmOpen, flag: ui.flag, prop: ui.prop, tab: "triage" };
-  agentUI[id] = keep;
-  render();
 }
-function agentSplit(id){
-  const t = T(id); if(!t) return;
-  const ui = agentUiFor(id);
-  ui.decided = true; ui.kind = "split"; ui.verdict = tr("agent.verdict_split"); ui.action = null;
-  render();
+// დაშალე — a mark for the agent (goes with „გადაამოწმე"); persisted server-side like the rest.
+async function agentSplit(id){
+  const t = agentTask(id); if(!t) return;
+  await agentActionFor(id, "split", {}).redo();
 }
+// წაშალე — DEFERRED (A2): the task is only marked (agent_status deleted_pending) and hidden
+// from the app; the card stays in place with „უკან" until the round closes, when the real
+// task_delete runs (agentRoundClose). Undo before that = clear the mark, nothing else changed.
 async function agentDelete(id){
-  const t = T(id); if(!t) return;
-  const ui = agentUiFor(id);
-  ui.snap = JSON.parse(JSON.stringify(t));
-  ui.decided = true; ui.kind = "delete"; ui.verdict = tr("agent.verdict_deleted");
-  render();
-  const d = await post("/api/task_delete", {id});
-  const subs = (d && d.deleted_ids) ? d.deleted_ids.filter(x => x !== id) : [];
-  const action = {
-    label: t.text || tr("undo.label_delete"),
-    undo: () => post("/api/task_restore", {id, subs}),
-    redo: () => post("/api/task_delete", {id}),
-  };
+  const t = agentTask(id); if(!t) return;
+  const action = agentActionFor(id, "delete", { text: t.text });
+  await action.redo();
   recordAction(action);
-  ui.action = action;
-  post("/api/agent_status", {id, status: "rejected", verdict: ui.verdict, tab: "triage"});
 }
 // ვეთანხმები — writes the whole proposal at once (move · priority · due · labels · title ·
 // subtasks · merge) through the app's own endpoints; ONE undo step for all of it.
 async function agentAccept(id){
   const t = T(id); if(!t) return;
-  const ui = agentUiFor(id);
   const p = agentProposal(t);
   const changes = agentChanges(t);
   const tgt = agentTarget(t, p);
@@ -487,45 +602,10 @@ async function agentAccept(id){
   }
   const subtasks = Array.isArray(p.subtasks) ? p.subtasks.map(s => String(s).trim()).filter(Boolean) : [];
   const mergeInto = p.merge_into && T(p.merge_into) ? p.merge_into : "";
-  const what = changes ? Object.entries(changes).map(([k, v]) => `${k}=${v}`).join(", ") : "";
-  ui.decided = true; ui.kind = "accept"; ui.changes = changes;
-  ui.verdict = changes ? tr("agent.verdict_changed", {what}) : tr("agent.verdict_accepted");
-  ui.snap = JSON.parse(JSON.stringify(t));
-  render();
-
-  const applyFields = dir => {
-    fields.forEach(c => { const v = dir === "undo" ? c.oldVal : c.newVal; const tt = T(id); if(tt) tt[c.field] = v; post("/api/update", {id, field: c.field, value: v}); });
-  };
-  let createdSubs = [], mergedSub = "";
-  const addSubs = async () => {
-    createdSubs = [];
-    const before = new Set(((T(id) || {}).subtasks || []).map(s => s.id));
-    for(const s of subtasks) await post("/api/subtask_add", {id, text: s});
-    createdSubs = ((T(id) || {}).subtasks || []).map(s => s.id).filter(x => !before.has(x));
-  };
-  const doMerge = async () => {
-    mergedSub = "";
-    if(!mergeInto) return;
-    const before = new Set(((T(mergeInto) || {}).subtasks || []).map(s => s.id));
-    await post("/api/subtask_add", {id: mergeInto, text: t.text});
-    mergedSub = (((T(mergeInto) || {}).subtasks || []).map(s => s.id).find(x => !before.has(x))) || "";
-    await post("/api/task_delete", {id});
-  };
-  const action = {
-    label: tr("undo.label_agent_accept"),
-    undo: async () => {
-      if(mergeInto){ if(mergedSub) await post("/api/task_delete", {id: mergedSub}); await post("/api/task_restore", {id, subs: []}); }
-      for(const sid of createdSubs) await post("/api/task_delete", {id: sid});
-      applyFields("undo");
-    },
-    redo: async () => { applyFields("redo"); await addSubs(); await doMerge(); },
-  };
-  applyFields("redo");
-  await addSubs();
-  await doMerge();
+  // the recipe = everything undo/redo needs; persisted server-side with the decision
+  const action = agentActionFor(id, "accept", { fields, subtasks, mergeInto, text: t.text, changes, proposal: p });
+  await action.redo();
   recordAction(action);
-  ui.action = action;
-  post("/api/agent_status", {id, status: changes ? "changed" : "accepted", changes, verdict: ui.verdict, tab: "triage"});
 }
 
 /* ---- the one button: „გადაამოწმე (N)" ---- */
@@ -537,27 +617,52 @@ function agentItemsToSend(){
     const split = ui.decided && ui.kind === "split";
     const cm = (ui.comment || "").trim();
     if(!(split || ui.flag || cm)) return;
-    const t = T(id) || ui.snap; if(!t) return;
+    const t = agentTask(id); if(!t) return;
     triage.push({ task_id: id, action: split ? "split" : null, flag: !!ui.flag,
                   proposal: agentProposal(t), changes: ui.changes || agentChanges(t) || null,
-                  decision: ui.verdict || null, comment: cm || null });
+                  decision: agentVerdict(ui) || null, comment: cm || null });
   });
   return { active: [], triage };
 }
 async function agentSend(){
-  const items = agentItemsToSend();
-  const n = items.active.length + items.triage.length;
-  if(!n) return;
+  const f = agentFooterInfo();
+  if(f.disabled) return;
   const b = document.getElementById("kp-send"); if(b) b.disabled = true;
   try {
-    const d = await post("/api/agent_queue", { active: items.active, triage: items.triage, agent: agentInfo.name || "" });
-    agentSentN = (d && d.queued) || n;
-    // sent cards leave the round: their status is now "queued" (server); drop the session marks
-    items.triage.forEach(it => { delete agentUI[it.task_id]; });
-    agentDraftsSave();
-    showToast(tr("agent.sent", {n: agentSentN}), "ok", 4000);
+    if(f.n){
+      const d = await post("/api/agent_queue", { active: f.items.active, triage: f.items.triage, agent: agentInfo.name || "" });
+      agentSentN = (d && d.queued) || f.n;
+      // sent cards leave the round: their status is now "queued" (server); drop the session marks
+      f.items.triage.forEach(it => { delete agentUI[it.task_id]; });
+      agentDraftsSave();
+      showToast(tr("agent.sent", {n: agentSentN}), "ok", 4000);
+    }
+    await agentRoundClose(!f.n);
     render();
   } catch(_){ if(b) b.disabled = false; }
+}
+// Round close: deferred deletes become real deletes (server), cards decided so far leave the
+// tab. One global undo for the whole close (restore every deleted task + its subtasks, cards
+// come back undecided).
+async function agentRoundClose(toast){
+  const d = await post("/api/agent_round_close", {});
+  const deleted = (d && d.deleted) || [];
+  Object.keys(agentUI).forEach(id => { if(agentUI[id].decided) delete agentUI[id]; });
+  agentDraftsSave();
+  if(deleted.length){
+    recordAction({
+      label: tr("undo.label_agent_round", {n: deleted.length}),
+      undo: async () => {
+        for(const x of deleted){ await post("/api/task_restore", {id: x.id, subs: x.subs || []}); await post("/api/agent_status", {id: x.id, status: "proposed", tab: "triage"}); }
+      },
+      redo: async () => {
+        for(const x of deleted){ await post("/api/agent_status", {id: x.id, status: "deleted_pending", tab: "triage", decision: {kind: "delete", recipe: {text: x.text}}}); }
+        await post("/api/agent_round_close", {});
+        Object.keys(agentUI).forEach(id => { if(agentUI[id].decided) delete agentUI[id]; });
+      },
+    });
+  }
+  if(toast) showToast(deleted.length ? tr("agent.round_closed", {n: deleted.length}) : tr("agent.round_closed0"), "ok", 4000);
 }
 
 agentDraftsLoad();

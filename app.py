@@ -194,9 +194,11 @@ def due_badge_count():
     n = 0
     with store_db() as conn:
         rows = conn.execute(
-            "SELECT due_date, due_datetime FROM tasks "
-            "WHERE is_deleted=0 AND checked=0 AND parent_id IS NULL "
-            "AND (due_date IS NOT NULL OR due_datetime IS NOT NULL)"
+            "SELECT t.due_date, t.due_datetime FROM tasks t "
+            "WHERE t.is_deleted=0 AND t.checked=0 AND t.parent_id IS NULL "
+            "AND (t.due_date IS NOT NULL OR t.due_datetime IS NOT NULL) "
+            # agent panel: a task marked for deferred deletion is hidden from the app's lists
+            "AND NOT EXISTS (SELECT 1 FROM task_local x WHERE x.task_id=t.id AND x.agent_status='deleted_pending')"
         ).fetchall()
     for r in rows:
         d, _t = split_due(r["due_date"], r["due_datetime"])
@@ -374,7 +376,8 @@ def sticky_tasks():
         rows = conn.execute(
             "SELECT t.id, t.content, t.priority, t.due_date, t.due_datetime FROM tasks t "
             "JOIN task_local tl ON tl.task_id = t.id "
-            "WHERE tl.sticky=1 AND t.checked=0 AND t.is_deleted=0"
+            "WHERE tl.sticky=1 AND t.checked=0 AND t.is_deleted=0 "
+            "AND COALESCE(tl.agent_status,'')!='deleted_pending'"   # agent panel: deferred delete = hidden
         ).fetchall()
     items = []
     for r in rows:

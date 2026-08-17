@@ -92,6 +92,8 @@ const AG_ICO = {
   edit:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   check:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
   done:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
+  repeat:  '<svg class="rep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>',
+  desc:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H3"/><path d="M15 12H3"/><path d="M17 19H3"/></svg>',
 };
 
 /* ---- shared dropdown: Todoister's .more-popover + .prio-option, every item = icon + text ---- */
@@ -317,6 +319,8 @@ function agentDueISO(v){
   const m = low.match(/^\+(\d+)d$/); if(m){ d.setDate(d.getDate() + Number(m[1])); return iso(d); }
   return "";                                       // unknown wording → no date proposal
 }
+// Proposal recurrence (C2): Todoist grammar ("every wednesday at 20:00"); anything else = none.
+function agentRepeat(p){ const v = (p.due_string || "").trim(); return isRecurrenceStr(v) ? v : ""; }
 function agentChanges(t){
   // diff between the edited proposal and the agent's original (what the agent learns from)
   const ui = agentUI[t.id]; if(!ui || !ui.prop || !t.agent_proposal) return null;
@@ -326,6 +330,7 @@ function agentChanges(t){
   if(ta.section !== tb.section) out.section = tb.section || "—";
   if((a.priority || "") !== (b.priority || "")) out.priority = b.priority || "";
   if(agentDueISO(a.due) !== agentDueISO(b.due) || (a.time || "") !== (b.time || "")) out.due = (agentDueISO(b.due) || "—") + (b.time ? " " + b.time : "");
+  if(agentRepeat(a) !== agentRepeat(b)) out.due_string = agentRepeat(b) || "—";
   if(JSON.stringify(a.labels || []) !== JSON.stringify(b.labels || [])) out.labels = (b.labels || []).map(l => "@" + l).join(" ") || "—";
   return Object.keys(out).length ? out : null;
 }
@@ -380,10 +385,12 @@ function agentTriageCard(t){
   const tgt = agentTarget(t, p), tgt0 = agentTarget(t, orig);
   const prio = ["P1","P2","P3","P4"].includes(p.priority) ? p.priority : t.priority;
   const due = agentDueISO(p.due), due0 = agentDueISO(orig.due);
-  const dueTxt = due ? fmtDate(due) + (p.time ? " " + p.time : "") : tr("agent.no_date");
+  const rep = agentRepeat(p), rep0 = agentRepeat(orig);
+  const dueTxt = (due ? fmtDate(due) + (p.time ? " " + p.time : "") : (rep ? "" : tr("agent.no_date"))) + (rep ? (due ? " · " : "") + repeatLabel(rep) : "");
   const labels = Array.isArray(p.labels) ? p.labels : [];
   const chg = { section: tgt.project !== tgt0.project || tgt.section !== tgt0.section, prio: prio !== (orig.priority || t.priority),
-                due: due !== due0 || (p.time || "") !== (orig.time || ""), labels: JSON.stringify(labels) !== JSON.stringify(orig.labels || []) };
+                due: due !== due0 || (p.time || "") !== (orig.time || "") || rep !== rep0, labels: JSON.stringify(labels) !== JSON.stringify(orig.labels || []) };
+  const descAdd = (p.description_append || "").trim();
   const secTxt = (tgt.project === t.project ? "" : tgt.project + " / ") + (tgt.section || (tgt.project === t.project ? tr("agent.no_section") : ""));
   const merge = p.merge_into && T(p.merge_into) ? `<span title="${esc(T(p.merge_into).text)}">${esc(tr("agent.merge_into", {title: T(p.merge_into).text}))}</span>` : "";
   const subs = Array.isArray(p.subtasks) && p.subtasks.length ? `<ul class="subs">${p.subtasks.map(s => `<li>${esc(String(s))}</li>`).join("")}</ul>` : "";
@@ -400,10 +407,11 @@ function agentTriageCard(t){
       <div class="prop" id="ag-prop-${t.id}">
         <span class="pv ${chg.section ? "changed" : ""}" onclick="agentPickSection(event,'${t.id}')">${esc(secTxt)}</span>
         <span class="pv ${prio.toLowerCase()} ${chg.prio ? "changed" : ""}" onclick="agentPickPrio(event,'${t.id}')">${prio}</span>
-        <span class="pv ${chg.due ? "changed" : ""}" id="ag-due-${t.id}" onclick="agentPickDate(event,'${t.id}')">${esc(dueTxt)}</span>
+        <span class="pv ${chg.due ? "changed" : ""}" id="ag-due-${t.id}" onclick="agentPickDate(event,'${t.id}')">${rep ? AG_ICO.repeat : ""}${esc(dueTxt)}</span>
         <span class="pv ${chg.labels ? "changed" : ""}" onclick="agentPickLabels(event,'${t.id}')">${labels.length ? esc(labels.map(l => "@" + l).join(" ")) : "@…"}</span>
         ${merge}
       </div>
+      ${descAdd ? `<div class="desc" title="${esc(tr("agent.desc_append"))}">${AG_ICO.desc}<span>${esc(descAdd)}</span></div>` : ""}
       ${subs}${q}
       <textarea class="cm ${cmOpen ? "show" : ""}" id="cm-${t.id}" rows="1" placeholder="${esc(tr("agent.comment_ph"))}" oninput="agentCm('${t.id}',this)">${esc(cm)}</textarea>
     </div>
@@ -511,11 +519,14 @@ function agentPickDate(ev, id){
   const t = T(id); if(!t || (agentUI[id] && agentUI[id].decided)) return;
   const p = agentProposal(t);
   datePickCurrent = agentDueISO(p.due);
+  repeatAnchorISO = datePickCurrent;
   calYear = calMonth = undefined;
   openDatePicker("ag-due-" + id,
-    date => { const e = agentEditProp(t); e.due = date || ""; if(!date) e.time = ""; closeAllPopovers(); render(); },
+    date => { const e = agentEditProp(t); e.due = date || ""; if(!date){ e.time = ""; e.due_string = ""; } closeAllPopovers(); render(); },
     time => { const e = agentEditProp(t); e.time = time || ""; render(); },
-    p.time || "");
+    p.time || "",
+    rs => { const e = agentEditProp(t); e.due_string = rs || ""; if(rs && !agentDueISO(e.due)) e.due = todayISO(); render(); },
+    agentRepeat(p));
 }
 function agentPickLabels(ev, id){
   ev.stopPropagation(); closeAllPopovers();
@@ -617,12 +628,21 @@ async function agentAccept(id){
   if(tgt.project !== t.project){ push("project", t.project, tgt.project); push("section", t.section || "", tgt.section); }
   else if((t.section || "") !== tgt.section) push("section", t.section || "", tgt.section);
   if(["P1","P2","P3","P4"].includes(p.priority)) push("priority", t.priority, p.priority);
+  const rep = agentRepeat(p);
   if(p.due !== undefined){ push("due_date", t.due_date || "", due); if(due) push("due_time", t.due_time || "", time); }
+  else if(rep && !t.due_date) push("due_date", "", todayISO());          // recurrence needs a start date (same default as the app)
+  // recurrence (C2): after the date/time, so the due object Todoist gets = date + "every … at HH:MM"
+  if(p.due_string !== undefined) push("due_string", isRecurrenceStr(t.due_string) ? t.due_string : "", rep);
   if(Array.isArray(p.labels)) push("chosen_labels", t.chosen_labels || [], p.labels);
+  // description: cleaned title → original text goes in when empty; then description_append (C2) as a new paragraph
+  let desc = t.description || "";
   if(p.title && p.title.trim() && p.title.trim() !== t.text){
     push("text", t.text, p.title.trim());
-    if(!(t.description || "").trim()) push("description", t.description || "", t.text);
+    if(!desc.trim()) desc = t.text;
   }
+  const descAdd = (p.description_append || "").trim();
+  if(descAdd) desc = (desc.trim() ? desc.replace(/\s+$/, "") + "\n\n" : "") + descAdd;
+  push("description", t.description || "", desc);
   const subtasks = Array.isArray(p.subtasks) ? p.subtasks.map(s => String(s).trim()).filter(Boolean) : [];
   const mergeInto = p.merge_into && T(p.merge_into) ? p.merge_into : "";
   // the recipe = everything undo/redo needs; persisted server-side with the decision

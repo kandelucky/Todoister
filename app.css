@@ -1801,6 +1801,8 @@
   .kt .tags .d.today{color:var(--today);} .kt .tags .d.over{color:var(--p1);} .kt .tags .d.fut{color:var(--p3);} .kt .tags .d.tom{color:#e3a008;}
   .kt .tags .cnt{color:var(--p2);} .kt .tags .cnt.max{color:var(--p1); font-weight:600;}
   .kt .read{font-size:12.5px; color:var(--text-2); margin-top:3px; line-height:1.4;} .kt .read b{color:var(--cal-hi); font-weight:600;}
+  .kt .desc{font-size:12.5px; color:var(--text-2); margin-top:3px; line-height:1.4; display:flex; gap:6px; align-items:flex-start;} .kt .desc svg{width:13px; height:13px; flex-shrink:0; margin-top:3px; opacity:.7;}
+  .kt .prop .pv svg.rep{width:11px; height:11px; margin-right:3px; vertical-align:-1px;}
   .kt .prop{display:flex; gap:10px; margin-top:3px; flex-wrap:wrap; color:var(--text-3); font-size:12px; align-items:center;}
   .kt .prop .pv{cursor:pointer; border-bottom:1px dotted var(--text-3);} .kt .prop .pv:hover{color:var(--text);}
   .kt .prop .pv.p1{color:var(--p1);} .kt .prop .pv.p2{color:var(--p2);} .kt .prop .pv.p3{color:var(--p3);}
@@ -1825,7 +1827,7 @@
   .kt .ic.flag.on{color:var(--p2); border-color:var(--p2);}
   .kt.flagged{border-left:3px solid var(--p2); padding-left:10px;}   /* only the flag gets a border (Lasha 2026-08-16) */
   /* decided → dimmed + verdict + undo */
-  .kt.done .ttl, .kt.done .tags, .kt.done .read, .kt.done .prop, .kt.done .subs, .kt.done .q{opacity:.45;}
+  .kt.done .ttl, .kt.done .tags, .kt.done .read, .kt.done .desc, .kt.done .prop, .kt.done .subs, .kt.done .q{opacity:.45;}
   .kt.done .acts, .kt.done .esc{display:none !important;}
   .kt.done .prop .pv{pointer-events:none; border-bottom-color:transparent;}
   .kt .dec{display:none; align-items:center; gap:8px; font-size:12px; color:var(--cal-hi); flex-shrink:0; max-width:46%; text-align:right;}

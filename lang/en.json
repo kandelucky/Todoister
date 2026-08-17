@@ -622,6 +622,7 @@
   "agent.type_note": "Note",
   "agent.no_date": "No date",
   "agent.no_section": "No section",
+  "agent.desc_append": "Added to the description",
   "agent.verdict_accepted": "Saved",
   "agent.verdict_changed": "Saved (with your change: {what}) — the agent learns",
   "agent.verdict_deleted": "Deleted",

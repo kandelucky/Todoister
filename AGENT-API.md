@@ -39,6 +39,8 @@ Proposal schema:
   "priority": "P1 | P2 | P3 | P4",
   "due": "YYYY-MM-DD | today | tomorrow | +Nd | ''",
   "time": "HH:MM or ''",
+  "due_string": "recurrence in Todoist grammar, English: 'every wednesday at 20:00' · 'every 20th at 10:00' · 'every day ending 2026-12-31' (optional; must start with 'every'; '' = no recurrence; the user can change it in the date chip's Repeat slot)",
+  "description_append": "text added to the task's description as a new paragraph on accept (optional; never replaces what is there — a cleaned title still puts the original text in first)",
   "labels": ["label", …],
   "subtasks": ["…", …],
   "merge_into": "<other task_id> (optional: becomes a subtask of that task)",
@@ -61,7 +63,7 @@ Query: `agent=<name>` · `status=queued|waiting|done|all` (default = not done) �
   "trigger_at": "ISO or '' — the user pressed „ხელახლა გაანალიზე'; consumed once" }
 ```
 - `queue` = agent work: `action:"split"` (დაშალე → add subtasks / re-propose), `flag` („?" — something is off), `comment` (free text). Do it if clear (subtasks via `POST /api/subtask_add {id,text}`, new proposal via `agent_propose`); ask the user in chat if unclear.
-- `log` = what the user decided on standard actions — read it to learn: `accepted` · `changed` (with `changes` diff **and** `proposal` = the user's edited version) · `completed` („შესრულდა" — the task was already done; `proposal` = what you proposed, so you learn when to send `complete: true`) · `rejected` (data.status `deleted_pending` = marked for deletion, still undoable) · `deleted` (the round closed, the task is really gone) · `undo` (the user took a decision back) · `split` (დაშალე marked; the item itself arrives in `queue` when the user sends) · `queue` · `done` · `round_close` · `trigger`.
+- `log` = what the user decided on standard actions — read it to learn: `accepted` · `changed` (with `changes` diff — keys project · section · priority · due · due_string · labels — **and** `proposal` = the user's edited version) · `completed` („შესრულდა" — the task was already done; `proposal` = what you proposed, so you learn when to send `complete: true`) · `rejected` (data.status `deleted_pending` = marked for deletion, still undoable) · `deleted` (the round closed, the task is really gone) · `undo` (the user took a decision back) · `split` (დაშალე marked; the item itself arrives in `queue` when the user sends) · `queue` · `done` · `round_close` · `trigger`.
 - `trigger_at` non-empty → re-analyse the Inbox now (`GET /api/state` → tasks with `project == "Inbox"` and no `agent_proposal`).
 
 ## 3. Finish a batch — `POST /api/agent_done`
@@ -104,7 +106,7 @@ the tab. Decisions survive an app restart (they live in the DB, not in the brows
 `POST /api/agent_round_close {}` (returns `{deleted:[{id, subs, text}], closed_at}`) ·
 `POST /api/agent_trigger {}` („ხელახლა გაანალიზე").
 What each panel action writes: ვეთანხმები = `POST /api/update` per changed field (project → section →
-priority → due_date → due_time → chosen_labels → text/description) + `subtask_add` per subtask +
+priority → due_date → due_time → due_string → chosen_labels → text → description) + `subtask_add` per subtask +
 on merge `subtask_add` on the target + `task_delete` of the card, then `agent_status accepted|changed`
 with the recipe. შესრულდა = `POST /api/update {id, field:"completed", value:true}` (the app's own completion,
 synced as `item_complete`) + `agent_status completed`; nothing else is written even when the proposal carries

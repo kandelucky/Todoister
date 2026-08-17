@@ -622,6 +622,7 @@
   "agent.type_note": "ჩანაწერი",
   "agent.no_date": "უთარიღო",
   "agent.no_section": "სექციის გარეშე",
+  "agent.desc_append": "აღწერას დაემატება",
   "agent.verdict_accepted": "ჩაწერილია",
   "agent.verdict_changed": "ჩაწერილია (შენი ცვლილებით: {what}) — აგენტი ისწავლის",
   "agent.verdict_deleted": "წაშლილია",

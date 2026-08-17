@@ -28,8 +28,14 @@ may propose it with `complete: true` — then it is the card's main button.
 
 Presence: connected = the agent polled GET /api/agent_queue within CONNECT_TTL seconds.
 busy = there is an open (not done) batch AND the agent is connected — the panel is locked
-while the agent works; if the agent drops, the panel is disabled and the queue simply waits
-in the DB until the agent's next poll (Lasha, 2026-08-16).
+while the agent works; if the agent drops, the queue simply waits in the DB until the agent's
+next poll (Lasha, 2026-08-16). known = some agent has ever connected (agent_name set).
+Offline (B3, Lasha 2026-08-17): the panel stays usable without the agent — standard actions
+(ვეთანხმები · შესრულდა · წაშალე · undo) and the round close („დაასრულე") work, only the agent
+actions (დაშალე · „?" · comment · „გადაამოწმე") wait for the connection; the agent reads the
+log at its next poll. The sidebar item is disabled only while known = False.
+agent_log rows carry the task text (+ resulting project/section) at decision time, so the
+agent learns from the log alone and „deleted" stays readable after the row is gone (Kiki, Q4).
 """
 import datetime
 import json
@@ -131,10 +137,12 @@ def agent_state(conn):
     open_batches = [r["batch_id"] for r in conn.execute(
         "SELECT DISTINCT batch_id FROM agent_queue WHERE status!='done' ORDER BY id"
     ).fetchall()]
+    name = _setting(conn, "agent_name", "")
     return {
         "connected": connected,
+        "known": bool(name),                      # an agent has connected at least once → panel usable offline
         "busy": connected and bool(open_batches),
-        "name": _setting(conn, "agent_name", ""),
+        "name": name,
         "last_seen": last_seen,
         "last_analysis": _setting(conn, "agent_last_analysis", ""),
         "open_batches": open_batches,
@@ -201,6 +209,22 @@ def _upsert_local(conn, task_id, **cols):
         f"ON CONFLICT(task_id) DO UPDATE SET " + ", ".join(f"{k}=excluded.{k}" for k in keys),
         (task_id, *[cols[k] for k in keys]),
     )
+
+
+def _task_brief(conn, tid):
+    """{text, project, section} of a task as it is NOW (after the panel applied its writes) —
+    goes into every agent_log row so the agent can learn from the log alone."""
+    try:
+        r = conn.execute(
+            "SELECT t.content, p.name AS project, s.name AS section FROM tasks t "
+            "LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN sections s ON s.id=t.section_id "
+            "WHERE t.id=?", (tid,)
+        ).fetchone()
+    except Exception:
+        r = None
+    if not r:
+        return {"text": "", "project": "", "section": ""}
+    return {"text": r["content"] or "", "project": r["project"] or "", "section": r["section"] or ""}
 
 
 # ---------------------------------------------------------------- GET /api/agent_queue
@@ -334,7 +358,7 @@ def _status(conn, body):
     status "" or "proposed" = undo (decision cleared). `decision` = {kind, changes, recipe}
     — the panel's own undo recipe, persisted so a decided card survives a restart until the
     round closes. `proposal` = the proposal in effect (the user's edited copy on "changed").
-    Everything is logged for the agent."""
+    Everything is logged for the agent, with the task text + resulting project/section."""
     tid = body.get("id")
     status = body.get("status") or ""
     if not tid or status not in STATUSES:
@@ -346,12 +370,16 @@ def _status(conn, body):
                   agent_decision=None if (undo or not isinstance(dec, dict)) else json.dumps(dec, ensure_ascii=False))
     ev = ("rejected" if status == "deleted_pending"
           else status if status in ("accepted", "changed", "rejected", "split", "completed") else "undo")
+    brief = _task_brief(conn, tid)     # text + resulting project/section (the panel wrote its fields first)
     _log_event(conn, tid, ev, {
         "status": status,
         "changes": body.get("changes") or None,
         "proposal": body.get("proposal") if isinstance(body.get("proposal"), dict) else None,
         "verdict": body.get("verdict") or "",
         "tab": body.get("tab") or "",
+        "text": brief["text"],
+        "project": brief["project"],
+        "section": brief["section"],
     })
     _log(f"{tid} → {status or 'cleared'}")
     return True
@@ -386,7 +414,7 @@ def _round_close(conn, body):
         ids = _delete_task(conn, r["task_id"])
         _upsert_local(conn, r["task_id"], agent_status="rejected", agent_decided_at=_now(), agent_decision=None)
         deleted.append({"id": r["task_id"], "subs": ids[1:], "text": r["content"] or ""})
-        _log_event(conn, r["task_id"], "deleted", {"status": "rejected", "subs": ids[1:]})
+        _log_event(conn, r["task_id"], "deleted", {"status": "rejected", "subs": ids[1:], "text": r["content"] or ""})
     ts = _now()
     _set(conn, "agent_round_closed_at", ts)
     _log_event(conn, "", "round_close", {"deleted": [d["id"] for d in deleted]})

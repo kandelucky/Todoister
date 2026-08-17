@@ -11,8 +11,16 @@ internet for them.
 
 ## Presence — how the panel knows you are there
 `GET /api/agent_queue?agent=<name>` is your poll **and** your heartbeat. Poll every 20–30 s.
-- connected = last poll < 60 s ago → the sidebar item is enabled.
-- no poll for 60 s → the panel is disabled; anything queued simply waits in the DB.
+- connected = last poll < 60 s ago.
+- known = some agent has connected at least once (`agent_name` set) → the sidebar item is enabled;
+  before that (fresh install, no agent ever) it is disabled.
+- **offline** = known but no poll for 60 s (B3, Lasha 2026-08-17): the panel stays usable — the
+  standard actions (ვეთანხმები · შესრულდა · წაშალე · undo) and the round close („დაასრულე") work
+  without you (they use the app's own endpoints; read the `log` since your last poll when you are
+  back); only the agent actions (დაშალე · „?" · comment · „გადაამოწმე (N)") are locked until you
+  return — drafts and დაშალე marks stay (a card with `agent_status = split` stays on tab 2 until it
+  is sent, regardless of rounds). A strip above the tabs says „აგენტი ხაზზე არ არის". Anything
+  already queued simply waits in the DB.
 - busy = an open batch exists **and** you are connected → the panel is locked („მუშავდება")
   until you `POST /api/agent_done`.
 Always send your `agent` name (`kiki`, `codex`, …) — the panel shows who is connected.
@@ -55,7 +63,7 @@ Query: `agent=<name>` · `status=queued|waiting|done|all` (default = not done) �
 (log entries after that moment).
 ```json
 { "ok": true, "server_time": "…",
-  "agent": { "connected": true, "busy": true, "name": "kiki", "last_seen": "…", "last_analysis": "…", "open_batches": ["b89710d261fb"], "queued": 2 },
+  "agent": { "connected": true, "known": true, "busy": true, "name": "kiki", "last_seen": "…", "last_analysis": "…", "open_batches": ["b89710d261fb"], "queued": 2 },
   "queue": [ { "id": 1, "batch_id": "b89…", "task_id": "…", "tab": "triage|active", "status": "queued",
                "created_at": "…", "item": { "task_id": "…", "action": "split|null", "flag": true, "proposal": {…}, "changes": {…}|null, "decision": "…", "comment": "…"|null } } ],
   "open_batches": ["b89…"],
@@ -64,6 +72,10 @@ Query: `agent=<name>` · `status=queued|waiting|done|all` (default = not done) �
 ```
 - `queue` = agent work: `action:"split"` (დაშალე → add subtasks / re-propose), `flag` („?" — something is off), `comment` (free text). Do it if clear (subtasks via `POST /api/subtask_add {id,text}`, new proposal via `agent_propose`); ask the user in chat if unclear.
 - `log` = what the user decided on standard actions — read it to learn: `accepted` · `changed` (with `changes` diff — keys project · section · priority · due · due_string · labels — **and** `proposal` = the user's edited version) · `completed` („შესრულდა" — the task was already done; `proposal` = what you proposed, so you learn when to send `complete: true`) · `rejected` (data.status `deleted_pending` = marked for deletion, still undoable) · `deleted` (the round closed, the task is really gone) · `undo` (the user took a decision back) · `split` (დაშალე marked; the item itself arrives in `queue` when the user sends) · `queue` · `done` · `round_close` · `trigger`.
+  Every per-task row (`accepted` · `changed` · `completed` · `rejected` · `split` · `undo`) also carries
+  `data.text` (task text at decision time) and `data.project` / `data.section` (**resulting** — the panel
+  writes its fields before it records the status, so on `accepted`/`changed` this is where the task ended
+  up); `deleted` carries `data.text` too — readable after the row is gone (Kiki, 2026-08-17).
 - `trigger_at` non-empty → re-analyse the Inbox now (`GET /api/state` → tasks with `project == "Inbox"` and no `agent_proposal`).
 
 ## 3. Finish a batch — `POST /api/agent_done`
@@ -77,7 +89,7 @@ Every task carries `agent_status`, `agent_proposal` (object or null), `agent_dec
 `agent_decision` (object or null — the panel's own undo recipe `{kind, changes, recipe}`; the
 recipe holds the old values, i.e. the snapshot before the accept), `postpone_count` (from the
 Todoist label `(+n)`); the response has a global
-`agent: {connected, busy, name, last_seen, last_analysis, open_batches, queued, round_closed_at, pending_deletes}`.
+`agent: {connected, known, busy, name, last_seen, last_analysis, open_batches, queued, round_closed_at, pending_deletes}`.
 - `pending_deletes` = tasks the user marked „წაშალე" on the panel: they are **not** in `tasks`
   (hidden from every app view) and not yet deleted on Todoist; the real delete runs when the
   round closes. Do not propose for them; do not touch them.

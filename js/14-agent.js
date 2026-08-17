@@ -13,7 +13,11 @@
 // accumulate and go with „გადაამოწმე (N)" → POST /api/agent_queue → panel locked until the
 // agent posts agent_done. „გადაამოწმე (N)" (or „დაასრულე" when nothing is to send) closes the
 // round: POST /api/agent_round_close → deferred deletes run, decided cards leave the tab.
-// No agent connected → the sidebar item is disabled; the queue waits in the DB.
+// Agent offline (B3, Lasha 2026-08-17): the panel stays usable — standard actions (ვეთანხმები ·
+// შესრულდა · წაშალე · undo) and the round close („დაასრულე") work without the agent (they use the
+// app's own endpoints; the agent reads the log at its next poll); only the agent actions (დაშალე ·
+// „?" · comment · „გადაამოწმე (N)") are locked until it is back — drafts + split marks stay.
+// The sidebar item is disabled only while no agent has EVER connected (agentInfo.known = false).
 //
 // Round rules (Kiki's ISSUES-2026-08-17 A1/A2, Lasha): a card never moves after a decision —
 // the order is frozen when it first shows (localStorage) and new proposals append at the end;
@@ -21,8 +25,10 @@
 // Decisions live server-side (task_local.agent_status + agent_decision = undo recipe), so a
 // restart loses nothing; only unsent comment/flag drafts sit in localStorage.
 
-let agentInfo = { connected:false, busy:false, name:"", last_seen:"", last_analysis:"", open_batches:[], queued:0,
+let agentInfo = { connected:false, known:false, busy:false, name:"", last_seen:"", last_analysis:"", open_batches:[], queued:0,
                   pending_deletes:[], round_closed_at:"" };
+// offline = an agent has connected before, but not within the last 60 s (and nothing is being processed)
+function agentOffline(){ return !!agentInfo.known && !agentInfo.connected && !agentInfo.busy; }
 let agentTab = "triage";           // Stage 1: tab 2 is the built one (tab 1 arrives in Stage 3)
 let agentSentN = 0;                // items in the batch we just sent (for the „მუშავდება" line)
 let _agentWasBusy = false;
@@ -104,11 +110,12 @@ function agentMenu(btn, items){
   const m = document.createElement("div");
   m.id = "more-popover"; m.className = "more-popover kp-menu"; m._btn = btn;
   m.innerHTML = items.map((it, i) =>
-    `<div class="prio-option" data-i="${i}"><span class="pflag">${AG_ICO[it.ico] || ""}</span><span class="pname">${esc(it.label)}</span></div>`
+    `<div class="prio-option ${it.disabled ? "disabled" : ""}" data-i="${i}" ${it.disabled && it.title ? `title="${esc(it.title)}"` : ""}><span class="pflag">${AG_ICO[it.ico] || ""}</span><span class="pname">${esc(it.label)}</span></div>`
   ).join("");
   m.addEventListener("click", e => {
     e.stopPropagation();
     const o = e.target.closest(".prio-option"); if(!o) return;
+    if(items[+o.dataset.i].disabled) return;       // locked item (agent offline) — menu stays open
     closeAllPopovers();
     items[+o.dataset.i].fn();
   });
@@ -152,7 +159,7 @@ function agentRenderNav(){
   const li = document.getElementById("filter_agent");
   const badge = document.getElementById("count-agent");
   if(!li || !badge) return;
-  li.classList.toggle("disabled", !agentInfo.connected && !agentInfo.busy);
+  li.classList.toggle("disabled", !agentInfo.known && !agentInfo.connected && !agentInfo.busy);   // B3: offline ≠ disabled
   li.classList.toggle("locked", !!agentInfo.busy);
   if(agentInfo.busy){
     if(!badge.querySelector(".spin")) badge.innerHTML = '<span class="spin"></span>';
@@ -193,6 +200,8 @@ function agentTriageTasks(){
     const ui = agentUI[t.id];
     if(t.agent_status === "proposed" && t.agent_proposal && t.project === INBOX_NAME && !t.completed) add(t);
     else if(decidedThisRound(t)){ agentHydrate(t); add(t); }
+    // დაშალე not yet sent (agent was offline at round close) → stays on the tab until „გადაამოწმე"
+    else if(t.agent_status === "split" && t.project === INBOX_NAME && !t.completed){ agentHydrate(t); add(t); }
     else if(ui && ui.decided && ui.tab === "triage") add(t);          // decision posted, state not back yet
   });
   (agentInfo.pending_deletes || []).forEach(t => { agentHydrate(t); add(t); });
@@ -337,12 +346,15 @@ function agentChanges(t){
 
 /* ---- view ---- */
 function renderAgentPanel(row){
-  if(!agentInfo.connected && !agentInfo.busy){
-    // agent away: the panel is off; a batch already sent simply waits in the DB (decision 1)
-    const waiting = agentInfo.queued ? `<div class="kp-wait">${esc(tr("agent.queue_waiting", {n: agentInfo.queued}))}</div>` : "";
-    row.innerHTML = `<div class="list-wrap kp-wrap"><div class="kp-off"><b>${esc(tr("agent.disabled_title"))}</b>${esc(tr("agent.disabled_body"))}${waiting}</div></div>`;
+  if(!agentInfo.known && !agentInfo.connected && !agentInfo.busy){
+    // no agent has ever connected: nothing to show yet (deep link / hash only — the sidebar item is disabled)
+    row.innerHTML = `<div class="list-wrap kp-wrap"><div class="kp-off"><b>${esc(tr("agent.disabled_title"))}</b>${esc(tr("agent.disabled_body"))}</div></div>`;
     return;
   }
+  const off = agentOffline();
+  // B3: agent away → the panel keeps working for standard actions + round close; agent actions wait.
+  // A batch already sent simply waits in the DB (decision 1) — say so on the strip.
+  const strip = off ? `<div class="kp-offline" id="kp-offline"><span class="kp-dot off"></span><b>${esc(tr("agent.offline_title"))}</b><span>${esc(tr("agent.offline_body"))}</span>${agentInfo.queued ? `<span class="wait">${esc(tr("agent.queue_waiting", {n: agentInfo.queued}))}</span>` : ""}</div>` : "";
   const triage = agentTriageTasks();
   // drafts left over from tasks that no longer carry a proposal (decided elsewhere) → drop
   Object.keys(agentUI).forEach(id => {
@@ -367,7 +379,7 @@ function renderAgentPanel(row){
         <button class="kp-send" id="kp-send" onclick="agentSend()" ${f.disabled ? "disabled" : ""}>${esc(f.label)}</button>
       </div>`;
   }
-  row.innerHTML = `<div class="list-wrap kp-wrap">
+  row.innerHTML = `<div class="list-wrap kp-wrap ${off ? "offline" : ""}">${strip}
     <div class="kp-tabs ${agentInfo.busy ? "locked" : ""}" role="tablist">
       <button class="kp-tab ${agentTab === "active" ? "active" : ""}" id="tab-active" onclick="agentSetTab('active')">${esc(tr("agent.tab_active"))} <span class="kp-tab-n">0</span></button>
       <button class="kp-tab ${agentTab === "triage" ? "active" : ""}" id="tab-triage" onclick="agentSetTab('triage')">${esc(tr("agent.tab_triage"))} <span class="kp-tab-n ${nTri ? "sage" : ""}">${nTri}</span></button>
@@ -398,6 +410,7 @@ function agentTriageCard(t){
   const hasFile = (t.comments || []).some(c => c.attachment);
   const cm = ui.comment || "", cmOpen = ui.cmOpen || !!cm.trim();
   const done = !!ui.decided;
+  const off = agentOffline();               // B3: comment / „?" locked while the agent is away
   const mainDone = p.complete === true;     // agent proposes completion → შესრულდა is the main button
   return `<div class="kt ${done ? "done" : ""} ${ui.flag ? "flagged" : ""}" id="kt-${t.id}">
     <span class="conf ${conf}" title="${esc(tr("agent.conf_" + conf))}"></span>
@@ -413,7 +426,7 @@ function agentTriageCard(t){
       </div>
       ${descAdd ? `<div class="desc" title="${esc(tr("agent.desc_append"))}">${AG_ICO.desc}<span>${esc(descAdd)}</span></div>` : ""}
       ${subs}${q}
-      <textarea class="cm ${cmOpen ? "show" : ""}" id="cm-${t.id}" rows="1" placeholder="${esc(tr("agent.comment_ph"))}" oninput="agentCm('${t.id}',this)">${esc(cm)}</textarea>
+      <textarea class="cm ${cmOpen ? "show" : ""}" id="cm-${t.id}" rows="1" placeholder="${esc(tr("agent.comment_ph"))}" oninput="agentCm('${t.id}',this)" ${off ? "readonly" : ""}>${esc(cm)}</textarea>
     </div>
     <div class="acts">
       ${mainDone ? `<button class="act ok" onclick="agentComplete('${t.id}')">${esc(tr("agent.complete"))}</button>`
@@ -421,13 +434,14 @@ function agentTriageCard(t){
       <button class="act" onclick="event.stopPropagation(); agentMenuMore(this,'${t.id}')">${esc(tr("agent.more"))}${AG_ICO.caret}</button>
     </div>
     <div class="dec"><span>${esc(agentVerdict(ui))}</span><button class="undo" title="${esc(tr("agent.undo"))}" onclick="agentUndo('${t.id}')">${AG_ICO.undo}</button></div>
-    <button class="ic cmt ${cmOpen ? "on" : ""}" id="ic-${t.id}" title="${esc(tr("agent.comment"))}" onclick="agentCmToggle('${t.id}')">${AG_ICO.cmt}</button>
-    <button class="ic flag ${ui.flag ? "on" : ""}" id="fl-${t.id}" title="${esc(tr("agent.flag"))}" onclick="agentFlag('${t.id}')">${AG_ICO.flag}</button>
+    <button class="ic cmt ${cmOpen ? "on" : ""}" id="ic-${t.id}" title="${esc(off ? tr("agent.offline_locked") : tr("agent.comment"))}" onclick="agentCmToggle('${t.id}')" ${off ? "disabled" : ""}>${AG_ICO.cmt}</button>
+    <button class="ic flag ${ui.flag ? "on" : ""}" id="fl-${t.id}" title="${esc(off ? tr("agent.offline_locked") : tr("agent.flag"))}" onclick="agentFlag('${t.id}')" ${off ? "disabled" : ""}>${AG_ICO.flag}</button>
   </div>`;
 }
 
 /* ---- comment + „?" flag (independent of any decision; survive undo) ---- */
 function agentCmToggle(id){
+  if(agentOffline()){ showToast(tr("agent.offline_locked"), "warn", 3000); return; }
   const ui = agentUiFor(id); ui.cmOpen = !ui.cmOpen;
   const t = document.getElementById("cm-" + id); if(!t) return;
   const show = ui.cmOpen || !!(ui.comment || "").trim();
@@ -443,6 +457,7 @@ function agentCm(id, t){
   agentRefreshFooter();
 }
 function agentFlag(id){
+  if(agentOffline()){ showToast(tr("agent.offline_locked"), "warn", 3000); return; }
   const ui = agentUiFor(id); ui.flag = !ui.flag;
   const c = document.getElementById("kt-" + id); if(c) c.classList.toggle("flagged", ui.flag);
   const f = document.getElementById("fl-" + id); if(f) f.classList.toggle("on", ui.flag);
@@ -454,13 +469,19 @@ function agentFlag(id){
 // decisions (accept / deferred delete) wait for the round to close; disabled when neither.
 function agentFooterInfo(triage){
   const items = agentItemsToSend(); const n = items.active.length + items.triage.length;
-  const decided = (triage || agentTriageTasks()).filter(t => agentUI[t.id] && agentUI[t.id].decided).length;
+  const pool = triage || agentTriageTasks();
+  const decided = pool.filter(t => agentUI[t.id] && agentUI[t.id].decided).length;
+  // B3 offline: nothing goes to the agent now — the button only closes the round („დაასრულე"),
+  // and only when a decision that the close acts on exists (split marks wait for the agent)
+  const off = agentOffline();
+  const closable = pool.filter(t => agentUI[t.id] && agentUI[t.id].decided && agentUI[t.id].kind !== "split").length;
   const dels = (agentInfo.pending_deletes || []).length;
   let summary = tr("agent.summary", {n}) + (n ? tr("agent.summary_split", {a: items.active.length, t: items.triage.length}) : "");
+  if(off && n) summary += tr("agent.summary_offline");
   if(dels) summary += tr("agent.summary_deletes", {n: dels});
-  return { items, n, decided, dels, summary,
-           label: n ? tr("agent.recheck", {n}) : decided ? tr("agent.finish") : tr("agent.recheck", {n: 0}),
-           disabled: !n && !decided };
+  return { items, n, decided, dels, summary, off,
+           label: off ? tr("agent.finish") : n ? tr("agent.recheck", {n}) : decided ? tr("agent.finish") : tr("agent.recheck", {n: 0}),
+           disabled: off ? !closable : (!n && !decided) };
 }
 function agentRefreshFooter(){
   const f = agentFooterInfo();
@@ -571,7 +592,7 @@ function agentMenuMore(btn, id){
     mainDone ? { label: tr("agent.accept"), ico: "check", fn: () => agentAccept(id) } : null,
     { label: tr("agent.more_edit"),   ico: "edit",  fn: () => agentHintEdit(id) },
     mainDone ? null : { label: tr("agent.complete"), ico: "done", fn: () => agentComplete(id) },
-    { label: tr("agent.more_split"),  ico: "split", fn: () => agentSplit(id) },
+    { label: tr("agent.more_split"),  ico: "split", fn: () => agentSplit(id), disabled: agentOffline(), title: tr("agent.offline_locked") },
     { label: tr("agent.more_delete"), ico: "trash", fn: () => agentDelete(id) },
   ].filter(Boolean));
 }
@@ -594,6 +615,7 @@ async function agentUndo(id){
 }
 // დაშალე — a mark for the agent (goes with „გადაამოწმე"); persisted server-side like the rest.
 async function agentSplit(id){
+  if(agentOffline()){ showToast(tr("agent.offline_locked"), "warn", 3000); return; }
   const t = agentTask(id); if(!t) return;
   await agentActionFor(id, "split", {}).redo();
 }
@@ -672,7 +694,7 @@ async function agentSend(){
   if(f.disabled) return;
   const b = document.getElementById("kp-send"); if(b) b.disabled = true;
   try {
-    if(f.n){
+    if(f.n && !f.off){          // offline: nothing is sent — split marks · flags · comments wait for the agent
       const d = await post("/api/agent_queue", { active: f.items.active, triage: f.items.triage, agent: agentInfo.name || "" });
       agentSentN = (d && d.queued) || f.n;
       // sent cards leave the round: their status is now "queued" (server); drop the session marks
@@ -680,7 +702,7 @@ async function agentSend(){
       agentDraftsSave();
       showToast(tr("agent.sent", {n: agentSentN}), "ok", 4000);
     }
-    await agentRoundClose(!f.n);
+    await agentRoundClose(!f.n || f.off);
     render();
   } catch(_){ if(b) b.disabled = false; }
 }
@@ -690,7 +712,8 @@ async function agentSend(){
 async function agentRoundClose(toast){
   const d = await post("/api/agent_round_close", {});
   const deleted = (d && d.deleted) || [];
-  Object.keys(agentUI).forEach(id => { if(agentUI[id].decided) delete agentUI[id]; });
+  // decided cards leave the tab; a დაშალე mark not yet sent (agent offline) stays for the next send
+  Object.keys(agentUI).forEach(id => { if(agentUI[id].decided && agentUI[id].kind !== "split") delete agentUI[id]; });
   agentDraftsSave();
   if(deleted.length){
     recordAction({
@@ -701,7 +724,7 @@ async function agentRoundClose(toast){
       redo: async () => {
         for(const x of deleted){ await post("/api/agent_status", {id: x.id, status: "deleted_pending", tab: "triage", decision: {kind: "delete", recipe: {text: x.text}}}); }
         await post("/api/agent_round_close", {});
-        Object.keys(agentUI).forEach(id => { if(agentUI[id].decided) delete agentUI[id]; });
+        Object.keys(agentUI).forEach(id => { if(agentUI[id].decided && agentUI[id].kind !== "split") delete agentUI[id]; });
       },
     });
   }
@@ -709,5 +732,5 @@ async function agentRoundClose(toast){
 }
 
 agentDraftsLoad();
-// deep link: #triage opens tab 2 (the view itself opens only when an agent is connected)
+// deep link: #triage opens tab 2 (the view opens once an agent has connected at least once)
 if(location.hash === "#triage") agentTab = "triage";

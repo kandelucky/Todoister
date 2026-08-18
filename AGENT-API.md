@@ -25,6 +25,27 @@ internet for them.
   until you `POST /api/agent_done`.
 Always send your `agent` name (`kiki`, `codex`, …) — the panel shows who is connected.
 
+## Duty session — several sessions of one agent (2026-08-18, Kiki's letter №2 §1, Lasha's yes)
+Lasha often has 2–3 sessions of the same agent open; each may run the poller. The server decides
+who works — not your code:
+- Make up a session id at start and send it on every poll: `GET /api/agent_queue?agent=kiki&session=<uuid>`.
+  Presence is kept per (agent, session); a session silent for 60 s is forgotten.
+- **The first live session is on duty**; every poll renews its lease; when it stays silent for 60 s the
+  lease is free and the next poller takes it. Explicit takeover (Lasha told THIS session to be the
+  secretary): `POST /api/agent_take {agent, session}` → `{ok, duty, on_duty:true, sessions}`.
+- **Only the duty session** gets `queue` rows and the `trigger_at`; every other session gets
+  `queue: []` and `trigger_at: ""` (the log, `open_batches` and presence are for everyone).
+  `POST /api/agent_done` from a session that is **not** on duty while another live session holds it →
+  `{ok:false, error:"not_on_duty", duty:{agent, session, since}}` and nothing changes; if nobody alive holds
+  the duty, the finisher takes it. `agent_propose` stays open to every session (harmless).
+- Every poll answers `session`, `on_duty: true|false`, `duty: {agent, session, since} | null`, `sessions: n`
+  (live sessions, all agents); `/api/state` → `agent.duty` + `agent.sessions`. The panel header shows
+  „kiki — მორიგე სესია (2 ხაზზე)" when more than one session is online.
+- A poll **without** `session` is session `""` — one more session, nothing special (old pollers keep working).
+- Two different agents at once (kiki + codex): one duty globally, first come (v1).
+- Not on duty → stand down: heartbeat only, don't act on the log; log event `duty` (`data: {agent, session,
+  takeover, prev, prev_expired}`) tells you when the lease moved.
+
 ## 1. Write a proposal — `POST /api/agent_propose`
 ```json
 { "agent": "kiki", "id": "<task_id>", "proposal": { …schema below… } }
@@ -59,11 +80,12 @@ Proposal schema:
 ```
 
 ## 2. Read what the user sent — `GET /api/agent_queue`
-Query: `agent=<name>` · `status=queued|waiting|done|all` (default = not done) · `since=<ISO>`
+Query: `agent=<name>` · `session=<id>` (see Duty session) · `status=queued|waiting|done|all` (default = not done) · `since=<ISO>`
 (log entries after that moment) · `limit=<n>` (log rows; default 500 with `since`, 100 without; max 2000).
 ```json
 { "ok": true, "server_time": "…",
-  "agent": { "connected": true, "known": true, "busy": true, "name": "kiki", "last_seen": "…", "last_analysis": "…", "open_batches": ["b89710d261fb"], "queued": 2 },
+  "agent": { "connected": true, "known": true, "busy": true, "name": "kiki", "last_seen": "…", "last_analysis": "…", "open_batches": ["b89710d261fb"], "queued": 2, "duty": { "agent": "kiki", "session": "…", "since": "…" }, "sessions": 2 },
+  "session": "…", "on_duty": true, "duty": { "agent": "kiki", "session": "…", "since": "…" }, "sessions": 2,
   "queue": [ { "id": 1, "batch_id": "b89…", "task_id": "…", "tab": "triage|active", "status": "queued",
                "created_at": "…", "item": { "task_id": "…", "action": "split|null", "flag": true, "proposal": {…}, "changes": {…}|null, "decision": "…", "comment": "…"|null } } ],
   // tab "active" item = the same shape without `proposal`: { task_id, action, flag, decision, comment, changes:{due, due_string}|null }
@@ -86,16 +108,17 @@ Query: `agent=<name>` · `status=queued|waiting|done|all` (default = not done) �
 
 ## 3. Finish a batch — `POST /api/agent_done`
 ```json
-{ "agent": "kiki", "batch_id": "b89710d261fb" }      // or "batch_id": "all"
+{ "agent": "kiki", "session": "<your id>", "batch_id": "b89710d261fb" }      // or "batch_id": "all"
 ```
-Marks the batch done; the panel unlocks and re-renders (toast „პასუხი მოვიდა").
+Marks the batch done; the panel unlocks and re-renders (toast „პასუხი მოვიდა"). Refused with
+`{ok:false, error:"not_on_duty", duty:{…}}` when another live session is on duty (see Duty session).
 
 ## 4. Read tasks — `GET /api/state`
 Every task carries `agent_status`, `agent_proposal` (object or null), `agent_decided_at`,
 `agent_decision` (object or null — the panel's own undo recipe `{kind, changes, recipe}`; the
 recipe holds the old values, i.e. the snapshot before the accept), `postpone_count` (from the
 Todoist label `(+n)`); the response has a global
-`agent: {connected, known, busy, name, last_seen, last_analysis, open_batches, queued, round_closed_at, pending_deletes}`.
+`agent: {connected, known, busy, name, last_seen, last_analysis, open_batches, queued, round_closed_at, duty, sessions, pending_deletes}`.
 - `pending_deletes` = tasks the user marked „წაშალე" on the panel: they are **not** in `tasks`
   (hidden from every app view) and not yet deleted on Todoist; the real delete runs when the
   round closes. Do not propose for them; do not touch them.
@@ -137,7 +160,7 @@ the tab. Decisions survive an app restart (they live in the DB, not in the brows
 `POST /api/agent_status {id, status, changes, verdict, tab, decision, proposal}` (panel records the user's decision) ·
 `POST /api/agent_queue {active:[…], triage:[…], agent}` (the one button; returns `batch_id`) ·
 `POST /api/agent_round_close {}` (returns `{deleted:[{id, subs, text, tab}], closed_at}`) ·
-`POST /api/agent_trigger {}` („ხელახლა გაანალიზე").
+`POST /api/agent_trigger {}` („ხელახლა გაანალიზე"; delivered to the duty session only).
 What each panel action writes: ვეთანხმები = `POST /api/update` per changed field (project → section →
 priority → due_date → due_time → due_string → chosen_labels → text → description) + `subtask_add` per subtask +
 on merge `subtask_add` on the target + `task_delete` of the card, then `agent_status accepted|changed`

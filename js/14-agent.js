@@ -159,8 +159,14 @@ function agentRenderHeader(){
     sub.style.display = on ? "" : "none";
     if(on){
       const la = agentInfo.last_analysis ? tr("agent.sub_last", {time: agentInfo.last_analysis.slice(11, 16)}) : tr("agent.sub_never");
-      const conn = agentInfo.connected ? tr("agent.connection_on") : tr("agent.connection_off");
-      sub.innerHTML = `${esc(la)} · <span class="kp-dot ${agentInfo.connected ? "" : "off"}" title="${esc(agentInfo.name || "")}"></span> ${esc(conn)}`;
+      let conn = agentInfo.connected ? tr("agent.connection_on") : tr("agent.connection_off");
+      const duty = agentInfo.duty || null;
+      if(agentInfo.connected && (agentInfo.sessions || 0) > 1){
+        // several sessions of the agent are polling → say which one is on duty (receives queue + trigger)
+        conn = tr("agent.duty_sessions", {name: (duty && duty.agent) || agentInfo.name || "", n: agentInfo.sessions});
+      }
+      const tip = (agentInfo.name || "") + (duty && duty.session ? " · " + duty.session.slice(0, 8) : "");
+      sub.innerHTML = `${esc(la)} · <span class="kp-dot ${agentInfo.connected ? "" : "off"}" title="${esc(tip)}"></span> ${esc(conn)}`;
     }
   }
   if(btn){

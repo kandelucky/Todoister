@@ -43,6 +43,16 @@ kept | completed | deleted_pending | split, with `decision.recipe.tab = "active"
 the card stays on ITS tab, in its group, dimmed, until the round closes. One card, one tab
 (Kiki Q2): a task on tab 2 (proposed / decided this round / split / deleted_pending, all in
 Inbox) never shows on tab 1. Move („გადაიტანე…") is a plain edit — no status.
+Duty session (2026-08-18, Kiki's letter №2 §1, Lasha's yes): Lasha runs several agent sessions at
+once, all polling as the same `agent` name → the trigger went to a random one and the queue to
+all of them (double work). Now every poll may carry `session=<id>`; presence is kept per
+(agent, session) in agent_session; the first live session becomes ON DUTY (setting agent_duty =
+JSON {agent, session, since}), each poll renews its lease, no poll for SESSION_TTL s → the lease
+is free and the next poller takes it. Only the duty session receives `queue` rows and consumes
+`trigger_at`; `agent_done` from another live session is refused ({ok:false, duty:{…}});
+`agent_propose` stays open to every session. `POST /api/agent_take {agent, session}` = explicit
+takeover. A poll without `session` is session "" — one more session, nothing special (old
+pollers keep working). Two different agents: first come, one duty globally (v1).
 """
 import datetime
 import json
@@ -50,6 +60,7 @@ import re
 import uuid
 
 CONNECT_TTL = 60          # seconds since the last agent poll → still "connected"
+SESSION_TTL = CONNECT_TTL # seconds of silence after which a session (and its duty lease) is gone
 LABEL_POSTPONE_RE = re.compile(r"^\(\+(\d+)\)$")   # Todoist label "(+3)" → postpone_count 3
 STATUSES = ("", "proposed", "accepted", "changed", "rejected", "split", "queued", "done", "deleted_pending", "completed",
             "postponed", "partial", "kept")                                   # the last three = tab 1 (აქტიური) decisions
@@ -107,6 +118,15 @@ def ensure_agent_schema(conn):
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_queue_status ON agent_queue(status)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS agent_session (
+            agent      TEXT NOT NULL,
+            session    TEXT NOT NULL DEFAULT '',   -- id the poller made up at start ('' = old poller without one)
+            first_seen TEXT,
+            last_seen  TEXT,
+            PRIMARY KEY (agent, session)
+        )
+    """)
     # First start with rounds: decisions made before this moment belong to no open round
     # (otherwise every card ever accepted would come back dimmed on tab 2).
     if not _setting(conn, "agent_round_closed_at", ""):
@@ -139,6 +159,76 @@ def _seconds_since(iso):
         return None
 
 
+def _cutoff():
+    """ISO timestamp SESSION_TTL seconds ago (same format as _now → string compare is safe)."""
+    return (datetime.datetime.now() - datetime.timedelta(seconds=SESSION_TTL)).isoformat(timespec="milliseconds")
+
+
+def _touch_session(conn, agent, session):
+    """Presence per (agent, session): upsert last_seen, forget sessions silent for SESSION_TTL."""
+    ts = _now()
+    conn.execute(
+        "INSERT INTO agent_session(agent, session, first_seen, last_seen) VALUES(?,?,?,?) "
+        "ON CONFLICT(agent, session) DO UPDATE SET last_seen=excluded.last_seen",
+        (agent, session, ts, ts),
+    )
+    conn.execute("DELETE FROM agent_session WHERE last_seen<?", (_cutoff(),))
+
+
+def _sessions_alive(conn):
+    return [dict(r) for r in conn.execute(
+        "SELECT agent, session, first_seen, last_seen FROM agent_session WHERE last_seen>=? ORDER BY first_seen",
+        (_cutoff(),),
+    ).fetchall()]
+
+
+def _duty(conn):
+    """The live duty lease {agent, session, since} or None. A lease whose session went silent
+    for SESSION_TTL is dead: cleared here, so the next poller can take it."""
+    raw = _setting(conn, "agent_duty", "")
+    if not raw:
+        return None
+    try:
+        d = json.loads(raw)
+    except Exception:
+        d = None
+    if not d or not isinstance(d, dict):
+        _set(conn, "agent_duty", "")
+        return None
+    row = conn.execute(
+        "SELECT last_seen FROM agent_session WHERE agent=? AND session=?",
+        (d.get("agent", ""), d.get("session", "")),
+    ).fetchone()
+    if not row or (row["last_seen"] or "") < _cutoff():
+        _set(conn, "agent_duty", "")
+        _log(f"duty lease of {d.get('agent')}/{(d.get('session') or '-')[:8]} expired")
+        return None
+    return {"agent": d.get("agent", ""), "session": d.get("session", ""), "since": d.get("since", "")}
+
+
+def _claim_duty(conn, agent, session, force=False):
+    """First live session = on duty; the holder keeps it while it polls; `force` = takeover.
+    Returns (duty dict, on_duty bool for the caller)."""
+    raw_prev = _setting(conn, "agent_duty", "")     # before _duty() may clear an expired lease
+    d = _duty(conn)
+    mine = bool(d) and d["agent"] == agent and d["session"] == session
+    if mine:
+        return d, True
+    if d and not force:
+        return d, False
+    try:
+        prev = d or (json.loads(raw_prev) if raw_prev else None)
+    except Exception:
+        prev = None
+    takeover = bool(force and d)                    # forced away from a LIVE holder
+    d = {"agent": agent, "session": session, "since": _now()}
+    _set(conn, "agent_duty", json.dumps(d, ensure_ascii=False))
+    _log_event(conn, "", "duty", {"agent": agent, "session": session, "takeover": takeover,
+                                  "prev": prev, "prev_expired": bool(prev and not takeover)})
+    _log(f"duty → {agent}/{(session or '-')[:8]}" + (" (takeover)" if takeover else ""))
+    return d, True
+
+
 def agent_state(conn):
     last_seen = _setting(conn, "agent_last_seen", "")
     age = _seconds_since(last_seen)
@@ -159,6 +249,8 @@ def agent_state(conn):
             "SELECT COUNT(*) c FROM agent_queue WHERE status!='done'"
         ).fetchone()["c"],
         "round_closed_at": _setting(conn, "agent_round_closed_at", ""),
+        "duty": _duty(conn),                      # {agent, session, since} | None — who receives queue + trigger
+        "sessions": len(_sessions_alive(conn)),   # live sessions (polled within SESSION_TTL), all agents
     }
 
 
@@ -239,15 +331,23 @@ def _task_brief(conn, tid):
 # ---------------------------------------------------------------- GET /api/agent_queue
 def get_queue(conn, params):
     """The agent's poll. Also the heartbeat: every call refreshes agent_last_seen.
-    params: agent (name), status (queued|waiting|all; default = not done), since (ISO — log
-    entries after this moment), limit (log rows: default 500 with since, 100 without; max 2000).
-    Returns queue rows, open batches, log, and a pending trigger (consumed once)."""
+    params: agent (name), session (id the poller made up at start; optional), status
+    (queued|waiting|all; default = not done), since (ISO — log entries after this moment),
+    limit (log rows: default 500 with since, 100 without; max 2000).
+    Returns queue rows, open batches, log, and a pending trigger (consumed once) — queue and
+    trigger only for the DUTY session (see module doc); everyone gets the log + presence."""
     agent = (params.get("agent") or "").strip()
+    session = (params.get("session") or "").strip()
     _set(conn, "agent_last_seen", _now())
     if agent:
         _set(conn, "agent_name", agent)
+    who = agent or _setting(conn, "agent_name", "")
+    _touch_session(conn, who, session)
+    duty, on_duty = _claim_duty(conn, who, session)
     status = (params.get("status") or "").strip()
-    if status in ("queued", "waiting", "done"):
+    if not on_duty:
+        rows = []                                  # another session is on duty → nothing to do here
+    elif status in ("queued", "waiting", "done"):
         rows = conn.execute(
             "SELECT * FROM agent_queue WHERE status=? ORDER BY id", (status,)
         ).fetchall()
@@ -286,14 +386,18 @@ def get_queue(conn, params):
         except Exception:
             data = {}
         log.append({"id": r["id"], "at": r["at"], "task_id": r["task_id"], "event": r["event"], "data": data})
-    trigger_at = _setting(conn, "agent_trigger_at", "")
+    trigger_at = _setting(conn, "agent_trigger_at", "") if on_duty else ""
     if trigger_at:
-        _set(conn, "agent_trigger_at", "")     # consumed once
+        _set(conn, "agent_trigger_at", "")     # consumed once — by the duty session only
     st = agent_state(conn)
     return {
         "ok": True,
         "server_time": _now(),
         "agent": st,
+        "session": session,
+        "on_duty": on_duty,
+        "duty": duty,
+        "sessions": st["sessions"],
         "queue": queue,
         "open_batches": st["open_batches"],
         "log": log,
@@ -314,6 +418,8 @@ def handle_post(conn, path, body):
         return _done(conn, body)
     if path == "/api/agent_round_close":
         return _round_close(conn, body)
+    if path == "/api/agent_take":
+        return _take(conn, body)
     if path == "/api/agent_trigger":
         _set(conn, "agent_trigger_at", _now())
         _log_event(conn, "", "trigger", {})
@@ -471,6 +577,17 @@ def _done(conn, body):
     batch_id = (body.get("batch_id") or "").strip()
     if not batch_id:
         return False
+    agent = (body.get("agent") or _setting(conn, "agent_name", "")).strip()
+    session = (body.get("session") or "").strip()
+    duty = _duty(conn)
+    if duty and not (duty["agent"] == agent and duty["session"] == session):
+        # another LIVE session holds the duty → this one must not close its batch
+        _log(f"agent_done refused: {agent}/{(session or '-')[:8]} not on duty "
+             f"(duty {duty['agent']}/{(duty['session'] or '-')[:8]})")
+        return {"ok": False, "error": "not_on_duty", "duty": duty}
+    if not duty:
+        _touch_session(conn, agent, session)
+        _claim_duty(conn, agent, session)      # nobody alive on duty → the finisher takes it
     if batch_id == "all":
         rows = conn.execute("SELECT id, task_id FROM agent_queue WHERE status!='done'").fetchall()
     else:
@@ -488,3 +605,17 @@ def _done(conn, body):
     _log_event(conn, "", "done", {"batch_id": batch_id, "n": len(rows)})
     _log(f"batch {batch_id} done ({len(rows)} item(s))")
     return {"done": len(rows)}
+
+
+def _take(conn, body):
+    """Agent → server: {agent, session} — explicit takeover of the duty lease (e.g. Lasha told
+    THIS session to be the secretary). Also counts as a poll for presence."""
+    agent = (body.get("agent") or _setting(conn, "agent_name", "")).strip()
+    session = (body.get("session") or "").strip()
+    if not agent:
+        return False
+    _set(conn, "agent_last_seen", _now())
+    _set(conn, "agent_name", agent)
+    _touch_session(conn, agent, session)
+    duty, _ = _claim_duty(conn, agent, session, force=True)
+    return {"duty": duty, "on_duty": True, "sessions": len(_sessions_alive(conn))}

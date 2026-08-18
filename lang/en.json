@@ -574,6 +574,7 @@
   "agent.sub_never": "No analysis yet",
   "agent.connection_on": "Connection active",
   "agent.connection_off": "No connection",
+  "agent.duty_sessions": "{name} — duty session ({n} online)",
   "agent.reanalyse": "Re-analyse",
   "agent.reanalyse_sent": "Request sent — the agent starts on its next poll",
   "agent.accept": "Agree",

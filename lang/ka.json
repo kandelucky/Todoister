@@ -574,6 +574,7 @@
   "agent.sub_never": "ანალიზი ჯერ არ ყოფილა",
   "agent.connection_on": "კავშირი აქტიურია",
   "agent.connection_off": "კავშირი არ არის",
+  "agent.duty_sessions": "{name} — მორიგე სესია ({n} ხაზზე)",
   "agent.reanalyse": "ხელახლა გაანალიზე",
   "agent.reanalyse_sent": "მოთხოვნა გაიგზავნა — აგენტი შემდეგ გამოკითხვაზე დაიწყებს",
   "agent.accept": "ვეთანხმები",

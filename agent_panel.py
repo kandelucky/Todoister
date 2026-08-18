@@ -36,6 +36,13 @@ actions (დაშალე · „?" · comment · „გადაამოწ�
 log at its next poll. The sidebar item is disabled only while known = False.
 agent_log rows carry the task text (+ resulting project/section) at decision time, so the
 agent learns from the log alone and „deleted" stays readable after the row is gone (Kiki, Q4).
+Tab 1 „აქტიური" (stage 3, 2026-08-18): pinned · overdue · today · tomorrow — plain task fields,
+no agent data needed. Its decisions are the panel's own writes through /api/update (postpone =
+due + label "(+n)", complete, deferred delete) recorded here as agent_status postponed | partial |
+kept | completed | deleted_pending | split, with `decision.recipe.tab = "active"` (+ `group`) so
+the card stays on ITS tab, in its group, dimmed, until the round closes. One card, one tab
+(Kiki Q2): a task on tab 2 (proposed / decided this round / split / deleted_pending, all in
+Inbox) never shows on tab 1. Move („გადაიტანე…") is a plain edit — no status.
 """
 import datetime
 import json
@@ -44,8 +51,10 @@ import uuid
 
 CONNECT_TTL = 60          # seconds since the last agent poll → still "connected"
 LABEL_POSTPONE_RE = re.compile(r"^\(\+(\d+)\)$")   # Todoist label "(+3)" → postpone_count 3
-STATUSES = ("", "proposed", "accepted", "changed", "rejected", "split", "queued", "done", "deleted_pending", "completed")
-DECIDED_IN_ROUND = ("accepted", "changed", "split", "deleted_pending", "completed")   # shown dimmed until the round closes
+STATUSES = ("", "proposed", "accepted", "changed", "rejected", "split", "queued", "done", "deleted_pending", "completed",
+            "postponed", "partial", "kept")                                   # the last three = tab 1 (აქტიური) decisions
+DECIDED_IN_ROUND = ("accepted", "changed", "split", "deleted_pending", "completed", "postponed", "partial", "kept")   # shown dimmed until the round closes
+LOGGED_STATUSES = ("accepted", "changed", "rejected", "split", "completed", "postponed", "partial", "kept")   # log event = status
 
 
 def _now():
@@ -107,7 +116,7 @@ def ensure_agent_schema(conn):
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
             at      TEXT,
             task_id TEXT,
-            event   TEXT,                       -- accepted | changed | rejected | completed | undo | queue | done | trigger
+            event   TEXT,                       -- accepted | changed | rejected | completed | postponed | partial | kept | split | deleted | undo | queue | done | trigger | round_close
             data    TEXT                        -- JSON
         )
     """)
@@ -231,8 +240,8 @@ def _task_brief(conn, tid):
 def get_queue(conn, params):
     """The agent's poll. Also the heartbeat: every call refreshes agent_last_seen.
     params: agent (name), status (queued|waiting|all; default = not done), since (ISO — log
-    entries after this moment). Returns queue rows, open batches, log, and a pending trigger
-    (consumed once)."""
+    entries after this moment), limit (log rows: default 500 with since, 100 without; max 2000).
+    Returns queue rows, open batches, log, and a pending trigger (consumed once)."""
     agent = (params.get("agent") or "").strip()
     _set(conn, "agent_last_seen", _now())
     if agent:
@@ -260,10 +269,15 @@ def get_queue(conn, params):
             "created_at": r["created_at"], "done_at": r["done_at"], "item": item,
         })
     since = (params.get("since") or "").strip()
+    try:
+        limit = int(params.get("limit") or 0)
+    except Exception:
+        limit = 0
+    limit = min(limit, 2000) if limit > 0 else (500 if since else 100)
     log_rows = conn.execute(
-        "SELECT * FROM agent_log WHERE at>? ORDER BY id LIMIT 500", (since,)
+        "SELECT * FROM agent_log WHERE at>? ORDER BY id LIMIT ?", (since, limit)
     ).fetchall() if since else conn.execute(
-        "SELECT * FROM agent_log ORDER BY id DESC LIMIT 100"
+        "SELECT * FROM agent_log ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()[::-1]
     log = []
     for r in log_rows:
@@ -369,7 +383,7 @@ def _status(conn, body):
                   agent_decided_at=None if undo else _now(),
                   agent_decision=None if (undo or not isinstance(dec, dict)) else json.dumps(dec, ensure_ascii=False))
     ev = ("rejected" if status == "deleted_pending"
-          else status if status in ("accepted", "changed", "rejected", "split", "completed") else "undo")
+          else status if status in LOGGED_STATUSES else "undo")
     brief = _task_brief(conn, tid)     # text + resulting project/section (the panel wrote its fields first)
     _log_event(conn, tid, ev, {
         "status": status,
@@ -406,15 +420,19 @@ def _round_close(conn, body):
     to now, so cards decided before this moment leave tab 2. Returns what was deleted
     (id + subtask ids) so the panel can offer one undo for the whole close."""
     rows = conn.execute(
-        "SELECT tl.task_id, t.content FROM task_local tl JOIN tasks t ON t.id=tl.task_id "
+        "SELECT tl.task_id, tl.agent_decision, t.content FROM task_local tl JOIN tasks t ON t.id=tl.task_id "
         "WHERE tl.agent_status='deleted_pending' AND t.is_deleted=0"
     ).fetchall()
     deleted = []
     for r in rows:
+        try:                                   # which tab the delete came from (undo of the close restores the right status)
+            tab = ((json.loads(r["agent_decision"] or "{}").get("recipe") or {}).get("tab")) or "triage"
+        except Exception:
+            tab = "triage"
         ids = _delete_task(conn, r["task_id"])
         _upsert_local(conn, r["task_id"], agent_status="rejected", agent_decided_at=_now(), agent_decision=None)
-        deleted.append({"id": r["task_id"], "subs": ids[1:], "text": r["content"] or ""})
-        _log_event(conn, r["task_id"], "deleted", {"status": "rejected", "subs": ids[1:], "text": r["content"] or ""})
+        deleted.append({"id": r["task_id"], "subs": ids[1:], "text": r["content"] or "", "tab": tab})
+        _log_event(conn, r["task_id"], "deleted", {"status": "rejected", "subs": ids[1:], "text": r["content"] or "", "tab": tab})
     ts = _now()
     _set(conn, "agent_round_closed_at", ts)
     _log_event(conn, "", "round_close", {"deleted": [d["id"] for d in deleted]})

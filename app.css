@@ -1806,6 +1806,14 @@
   .kt .tags{display:flex; gap:10px; margin-top:3px; flex-wrap:wrap; color:var(--text-3); font-size:12px; align-items:center;}
   .kt .tags .d.today{color:var(--today);} .kt .tags .d.over{color:var(--p1);} .kt .tags .d.fut{color:var(--p3);} .kt .tags .d.tom{color:#e3a008;}
   .kt .tags .cnt{color:var(--p2);} .kt .tags .cnt.max{color:var(--p1); font-weight:600;}
+  /* tab 1 (stage 3): overdue age · project · date chip repeat icon · overdue collapse · intervention pending */
+  .kt .tags .age.warn{color:var(--p2);} .kt .tags .age.max{color:var(--p1); font-weight:600;}
+  .kt .tags .proj{color:var(--text-3); opacity:.8;}
+  .kt .tags .d svg.rep{width:11px; height:11px; margin-right:3px; vertical-align:-1px;}
+  .kt.esc-on .acts{display:none;}
+  .kt .esc .sub button.warn{border-color:var(--p1); color:var(--p1);} .kt .esc .sub button.warn:hover{background:rgba(220,76,62,.10);}
+  .kt .esc .sub button.x{width:22px; padding:0; margin-left:auto; display:inline-flex; align-items:center; justify-content:center;} .kt .esc .sub button.x svg{width:12px; height:12px;}
+  .kp-more{display:block; margin:0 0 10px 2px; padding:4px 8px; font-size:12.5px; color:var(--cal-hi); border-radius:var(--r);} .kp-more:hover{background:var(--hover);}
   .kt .read{font-size:12.5px; color:var(--text-2); margin-top:3px; line-height:1.4;} .kt .read b{color:var(--cal-hi); font-weight:600;}
   .kt .desc{font-size:12.5px; color:var(--text-2); margin-top:3px; line-height:1.4; display:flex; gap:6px; align-items:flex-start;} .kt .desc svg{width:13px; height:13px; flex-shrink:0; margin-top:3px; opacity:.7;}
   .kt .prop .pv svg.rep{width:11px; height:11px; margin-right:3px; vertical-align:-1px;}

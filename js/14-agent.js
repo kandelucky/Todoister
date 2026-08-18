@@ -5,8 +5,19 @@
 // (panel.js / active.js) — same look, real data + real endpoints.
 //
 // Two tabs, one card shape, one button:
-//   აქტიური        — pinned · overdue · today · tomorrow          (Stage 3)
-//   დაუხარისხებელი — Inbox captures + the agent's proposal          (Stage 1, this file)
+//   აქტიური        — pinned · overdue · today · tomorrow          (Stage 3, 2026-08-18)
+//   დაუხარისხებელი — Inbox captures + the agent's proposal          (Stage 1)
+// Tab 1 needs no agent data: plain task fields, grouped აპინული (n/10) · ვადაგადაცილებული (due asc,
+// collapsed to 10 + „მეტი…") · დღეს · ხვალ. One card, one tab (Kiki Q2): whatever tab 2 shows is
+// left out here. Card: priority circle = შესრულდა · გადადება ▾ (ხვალ · 2-3 დღე · კვირა · თვე ·
+// როდესმე · თარიღი… = the app's own date popover with time + repeat) writes the due at once and
+// bumps the Todoist label „(+n)" (Lasha: visible on the phone) · მეტი ▾ = ნაწილობრივ · დაშალე ·
+// გადაიტანე… (plain project/section edit, the card stays open) · წაშალე (deferred, as on tab 2) ·
+// დატოვე. Intervention (the only inline block): the 5th postpone OR an overdue age ≥ 30 days →
+// instead of postponing: დავშალოთ · როდესმეში · წაშალე · მაინც გადადე. Age „N დღე" on the card
+// (orange ≥ 7, red ≥ 30). Decisions carry recipe.tab = "active" + group + snap (sort key), so a
+// decided card stays in ITS group, in place, dimmed, until the round closes; undo on tab 1
+// clears the status ("" — never "proposed", that word means a tab-2 card).
 // ვეთანხმები and შესრულდა run immediately through the app's own endpoints, with undo. წაშალე is DEFERRED
 // (agent_status "deleted_pending": hidden from the app's lists, restorable on the card) and
 // becomes a real delete only when the round closes. Agent actions (დაშალე, „?" flag, comment)
@@ -29,14 +40,19 @@ let agentInfo = { connected:false, known:false, busy:false, name:"", last_seen:"
                   pending_deletes:[], round_closed_at:"" };
 // offline = an agent has connected before, but not within the last 60 s (and nothing is being processed)
 function agentOffline(){ return !!agentInfo.known && !agentInfo.connected && !agentInfo.busy; }
-let agentTab = "triage";           // Stage 1: tab 2 is the built one (tab 1 arrives in Stage 3)
+let agentTab = "active";           // remembered per browser (localStorage agent_tab); #triage deep link → tab 2
+try { agentTab = localStorage.getItem("agent_tab") === "triage" ? "triage" : "active"; } catch(_){}
+let agentActiveIds = new Set();    // ids on tab 1 in the last render (which tab a shared handler acts on)
+let agentOverAll = false;          // overdue group expanded past AGENT_OVER_SHOW
+const AGENT_OVER_SHOW = 10;
 let agentSentN = 0;                // items in the batch we just sent (for the „მუშავდება" line)
 let _agentWasBusy = false;
 // Per-card session state: id → {decided, kind:'accept'|'complete'|'delete'|'split', changes, action (undo/redo
 // object, rebuilt from the server-side recipe after a restart), prop (edited proposal), comment,
 // cmOpen, flag}. Verdict text is derived (agentVerdict) so a language switch re-renders it.
 const agentUI = {};
-const AGENT_DECIDED = ["accepted", "changed", "split", "deleted_pending", "completed"];   // server statuses shown dimmed this round
+const AGENT_DECIDED = ["accepted", "changed", "split", "deleted_pending", "completed", "postponed", "partial", "kept"];   // server statuses shown dimmed this round
+const AGENT_POSTPONE_RE = /^\(\+(\d+)\)$/;   // Todoist label "(+3)" = postponed 3 times
 /* ---- frozen card order (A1): ids in the order they first appeared; a card keeps its index
    for the whole round, newcomers append, cards that leave the tab are dropped ---- */
 const AGENT_ORDER_KEY = "agent_order";
@@ -61,7 +77,7 @@ function agentDraftsLoad(){
     const m = JSON.parse(localStorage.getItem(AGENT_DRAFTS_KEY) || "{}");
     Object.keys(m).forEach(id => {
       const d = m[id] || {}, cm = d.comment || "";
-      if(cm.trim() || d.flag) agentUI[id] = { tab:"triage", comment: cm, flag: !!d.flag, cmOpen: !!cm.trim() };
+      if(cm.trim() || d.flag) agentUI[id] = { tab: d.tab === "active" ? "active" : "triage", comment: cm, flag: !!d.flag, cmOpen: !!cm.trim() };
     });
   } catch(_){}
 }
@@ -69,7 +85,7 @@ function agentDraftsSave(){
   const m = {};
   Object.keys(agentUI).forEach(id => {
     const ui = agentUI[id], cm = (ui.comment || "").trim();
-    if(cm || ui.flag) m[id] = { comment: ui.comment || "", flag: !!ui.flag };
+    if(cm || ui.flag) m[id] = { comment: ui.comment || "", flag: !!ui.flag, tab: ui.tab || "triage" };
   });
   try {
     if(Object.keys(m).length) localStorage.setItem(AGENT_DRAFTS_KEY, JSON.stringify(m));
@@ -100,6 +116,7 @@ const AG_ICO = {
   done:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
   repeat:  '<svg class="rep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>',
   desc:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H3"/><path d="M15 12H3"/><path d="M17 19H3"/></svg>',
+  move:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg>',
 };
 
 /* ---- shared dropdown: Todoister's .more-popover + .prio-option, every item = icon + text ---- */
@@ -152,8 +169,8 @@ function agentRenderHeader(){
   }
 }
 function agentPendingCount(){
-  // cards awaiting a decision on both tabs (Stage 1: triage only)
-  return agentTriageTasks().filter(t => !(agentUI[t.id] && agentUI[t.id].decided)).length;
+  // cards awaiting a decision on both tabs
+  return agentPools().all.filter(t => !(agentUI[t.id] && agentUI[t.id].decided)).length;
 }
 function agentRenderNav(){
   const li = document.getElementById("filter_agent");
@@ -190,44 +207,104 @@ async function agentReanalyse(){
 // AGENT_DECIDED and decided after the last round close), kept in place, dimmed, with verdict +
 // undo. Tasks marked for deferred deletion are not in `state` (hidden from the app) — they
 // arrive as agentInfo.pending_deletes. Order = frozen (agentOrdered).
+// Which tab a persisted decision belongs to (recipe.tab; decisions from before stage 3 = triage).
+function agentDecTab(t){ const d = t.agent_decision || {}; return ((d.recipe && d.recipe.tab) || d.tab) === "active" ? "active" : "triage"; }
+function agentDecidedThisRound(t){ return AGENT_DECIDED.includes(t.agent_status) && (t.agent_decided_at || "") > (agentInfo.round_closed_at || ""); }
 function agentTriageTasks(){
-  const closed = agentInfo.round_closed_at || "";
-  const decidedThisRound = t => AGENT_DECIDED.includes(t.agent_status) && (t.agent_decided_at || "") > closed;
   const seen = new Set(), pool = [];
   const add = t => { if(!seen.has(t.id)){ seen.add(t.id); pool.push(t); } };
   state.forEach(t => {
     if(t.parent_id) return;
     const ui = agentUI[t.id];
     if(t.agent_status === "proposed" && t.agent_proposal && t.project === INBOX_NAME && !t.completed) add(t);
-    else if(decidedThisRound(t)){ agentHydrate(t); add(t); }
+    else if(agentDecidedThisRound(t) && agentDecTab(t) === "triage"){ agentHydrate(t, "triage"); add(t); }
     // დაშალე not yet sent (agent was offline at round close) → stays on the tab until „გადაამოწმე"
-    else if(t.agent_status === "split" && t.project === INBOX_NAME && !t.completed){ agentHydrate(t); add(t); }
+    else if(t.agent_status === "split" && agentDecTab(t) === "triage" && !t.completed){ agentHydrate(t, "triage"); add(t); }
     else if(ui && ui.decided && ui.tab === "triage") add(t);          // decision posted, state not back yet
   });
-  (agentInfo.pending_deletes || []).forEach(t => { agentHydrate(t); add(t); });
+  (agentInfo.pending_deletes || []).forEach(t => { if(agentDecTab(t) === "triage"){ agentHydrate(t, "triage"); add(t); } });
   return agentOrdered(pool);
+}
+/* ---- tab 1 data: plain task fields, four groups. Decided cards (this round, recipe.tab =
+   "active") stay in their recipe.group; everything on tab 2 is excluded (one card, one tab);
+   tasks sent to the agent (queued) wait for its answer and show nowhere. ---- */
+const AGENT_GROUPS = ["pin", "over", "today", "tom"];
+function agentGroupOf(t){
+  if(t.sticky) return "pin";
+  const d = (t.due_date || "").slice(0, 10); if(!d) return "";
+  const today = todayISO(); if(d < today) return "over"; if(d === today) return "today";
+  const tm = new Date(); tm.setDate(tm.getDate() + 1); return d === iso(tm) ? "tom" : "";
+}
+function agentSnap(t){ return { due_date: t.due_date || "", due_time: t.due_time || "", priority: t.priority || "P4", text: t.text || "" }; }
+function agentUiGroup(t){ const ui = agentUI[t.id]; const g = ui && ui.action && ui.action.recipe && ui.action.recipe.group; return AGENT_GROUPS.includes(g) ? g : (agentGroupOf(t) || "over"); }
+// sort key: due → time → priority → text; a decided card keeps the key it had when decided (snap)
+function agentSortKey(t){
+  const ui = agentUI[t.id]; const s = (ui && ui.decided && ui.action && ui.action.recipe && ui.action.recipe.snap) || t;
+  return (s.due_date ? s.due_date + "T" + (s.due_time || "99:99") : "9999") + "|" + (_PRIO_RANK[s.priority] || 4) + "|" + (s.text || "").toLowerCase();
+}
+function agentOverdueDays(t){
+  const d = (t.due_date || "").slice(0, 10); if(!d || !isOverdue(d)) return 0;
+  const [y, m, dd] = d.split("-").map(Number), [y2, m2, d2] = todayISO().split("-").map(Number);
+  return Math.round((new Date(y2, m2 - 1, d2) - new Date(y, m - 1, dd)) / 86400000);
+}
+function agentActiveGroups(triageIds){
+  const g = { pin: [], over: [], today: [], tom: [] }, ids = new Set();
+  const put = (t, grp) => { if(!grp || ids.has(t.id)) return; ids.add(t.id); g[grp].push(t); };
+  state.forEach(t => {
+    if(t.parent_id || triageIds.has(t.id)) return;
+    const ui = agentUI[t.id];
+    if(agentDecidedThisRound(t) && agentDecTab(t) === "active"){ agentHydrate(t, "active"); put(t, agentUiGroup(t)); return; }
+    if(t.agent_status === "split" && agentDecTab(t) === "active" && !t.completed){ agentHydrate(t, "active"); put(t, agentUiGroup(t)); return; }
+    if(ui && ui.decided && ui.tab === "active"){ put(t, agentUiGroup(t)); return; }   // decision posted, state not back yet
+    if(t.completed || t.agent_status === "queued") return;
+    put(t, agentGroupOf(t));
+  });
+  (agentInfo.pending_deletes || []).forEach(t => { if(agentDecTab(t) === "active"){ agentHydrate(t, "active"); put(t, agentUiGroup(t)); } });
+  AGENT_GROUPS.forEach(k => g[k].sort((a, b) => { const ka = agentSortKey(a), kb = agentSortKey(b); return ka < kb ? -1 : ka > kb ? 1 : 0; }));
+  const list = AGENT_GROUPS.reduce((acc, k) => acc.concat(g[k]), []);
+  return { groups: g, list, ids, pending: list.filter(t => !(agentUI[t.id] && agentUI[t.id].decided)).length };
+}
+// both tabs at once (tab 2 first — it has priority for a task that would qualify for both)
+function agentPools(){
+  const triage = agentTriageTasks();
+  const act = agentActiveGroups(new Set(triage.map(t => t.id)));
+  agentActiveIds = act.ids;
+  return { triage, act, all: triage.concat(act.list) };
 }
 function agentPendingDelete(id){ return (agentInfo.pending_deletes || []).find(t => t.id === id); }
 function agentTask(id){ return T(id) || agentPendingDelete(id); }
-function agentUiFor(id){ return agentUI[id] || (agentUI[id] = { tab:"triage" }); }
+function agentUiFor(id, tab){
+  const ui = agentUI[id] || (agentUI[id] = { tab: agentActiveIds.has(id) ? "active" : "triage" });
+  if(tab) ui.tab = tab;
+  return ui;
+}
+// recipe base for a decision made on a card: which tab (+ group and sort snapshot on tab 1)
+function agentBase(id){
+  const t = agentTask(id);
+  if(t && agentActiveIds.has(id)) return { tab: "active", group: agentUiGroup(t), snap: agentSnap(t) };
+  return { tab: "triage" };
+}
 // A card decided in an earlier session (or before a reload): rebuild its session state from the
 // server-side decision {kind, changes, recipe} so the verdict shows and undo works.
-function agentHydrate(t){
-  const ui = agentUiFor(t.id);
+function agentHydrate(t, tab){
+  const ui = agentUiFor(t.id, tab);
   if(ui.decided) return;
   // the user just undid exactly this decision (same decided_at) and the state is not back
   // yet — do not resurrect it from the stale snapshot
   if(ui.undone && ui.undone === (t.agent_decided_at || "")) return;
   const d = t.agent_decision || {};
-  const kind = d.kind || (t.agent_status === "deleted_pending" ? "delete" : t.agent_status === "split" ? "split" : t.agent_status === "completed" ? "complete" : "accept");
+  const byStatus = { deleted_pending: "delete", split: "split", completed: "complete", postponed: "postpone", partial: "partial", kept: "keep" };
+  const kind = d.kind || byStatus[t.agent_status] || "accept";
   const recipe = d.recipe || { changes: d.changes || null };
   if(kind === "delete" && !recipe.text) recipe.text = t.text;
+  if(tab && !recipe.tab) recipe.tab = tab;
   agentMark(t.id, agentActionFor(t.id, kind, recipe));
 }
 function agentMark(id, action){
   const ui = agentUiFor(id);
   ui.decided = true; ui.kind = action.kind; ui.changes = (action.recipe && action.recipe.changes) || null; ui.action = action;
-  ui.undone = "";
+  ui.undone = ""; ui.esc = null;
+  if(action.recipe && action.recipe.tab) ui.tab = action.recipe.tab;
 }
 function agentUnmark(id){
   const ui = agentUI[id]; if(!ui) return;
@@ -240,6 +317,9 @@ function agentVerdict(ui){
   if(ui.kind === "delete") return tr("agent.verdict_delete_pending");
   if(ui.kind === "complete") return tr("agent.verdict_completed");
   if(ui.kind === "split") return tr("agent.verdict_split");
+  if(ui.kind === "partial") return tr("agent.verdict_partial");
+  if(ui.kind === "keep") return tr("agent.verdict_keep");
+  if(ui.kind === "postpone"){ const r = (ui.action && ui.action.recipe) || {}; return tr("agent.verdict_postponed", {when: agentWhenLabel(r), n: r.n || 0}); }
   if(ui.changes){ const what = Object.entries(ui.changes).map(([k, v]) => `${k}=${v}`).join(", "); return tr("agent.verdict_changed", {what}); }
   return tr("agent.verdict_accepted");
 }
@@ -247,9 +327,16 @@ function agentVerdict(ui){
 // restart (the recipe is persisted in task_local.agent_decision by /api/agent_status).
 //   accept: {fields:[{field,oldVal,newVal}], subtasks:[text], createdSubs:[id], mergeInto, mergedSub, text, changes, proposal}
 //   complete: {text, proposal}     delete: {text}     split: {}
+//   postpone (tab 1): {fields:[due_date · due_time · due_string · chosen_labels], when, date, n, changes:{due, due_string}}
+//   partial / keep (tab 1): {} — no task change, the status alone is the record
+// Every recipe may carry tab ("active" | "triage") + group + snap (tab 1: where the card sits).
 function agentActionFor(id, kind, recipe){
   const r = recipe || {};
-  const status = kind === "delete" ? "deleted_pending" : kind === "split" ? "split" : kind === "complete" ? "completed" : (r.changes ? "changed" : "accepted");
+  const status = kind === "delete" ? "deleted_pending" : kind === "split" ? "split" : kind === "complete" ? "completed"
+               : kind === "postpone" ? "postponed" : kind === "partial" ? "partial" : kind === "keep" ? "kept"
+               : (r.changes ? "changed" : "accepted");
+  const tab = r.tab === "active" ? "active" : "triage";
+  const cleared = tab === "active" ? "" : "proposed";   // undo: a tab-1 card never becomes "proposed" (that is a tab-2 word)
   // შესრულდა = the app's own completion (same endpoint as the check circle), nothing else changes
   const setDone = async v => { const tt = T(id); if(tt) tt.completed = v; await post("/api/update", {id, field: "completed", value: v}); };
   const applyFields = async dir => {
@@ -274,28 +361,37 @@ function agentActionFor(id, kind, recipe){
     await post("/api/task_delete", {id});
   };
   const action = {
-    kind, recipe: r,
-    label: kind === "delete" ? (r.text || tr("undo.label_delete")) : kind === "split" ? tr("agent.more_split") : kind === "complete" ? tr("undo.label_completed") : tr("undo.label_agent_accept"),
+    kind, status, recipe: r,
+    label: kind === "delete" ? (r.text || tr("undo.label_delete")) : kind === "split" ? tr("agent.more_split") : kind === "complete" ? tr("undo.label_completed")
+         : kind === "postpone" ? tr("agent.postpone") : kind === "partial" ? tr("agent.more_partial") : kind === "keep" ? tr("agent.more_keep") : tr("undo.label_agent_accept"),
     undo: async () => {
       agentUnmark(id); render();
       if(kind === "complete") await setDone(false);
+      if(kind === "postpone") await applyFields("undo");
       if(kind === "accept"){
         if(r.mergeInto){ if(r.mergedSub) await post("/api/task_delete", {id: r.mergedSub}); await post("/api/task_restore", {id, subs: []}); }
         for(const sid of (r.createdSubs || [])) await post("/api/task_delete", {id: sid});
         await applyFields("undo");
       }
-      await post("/api/agent_status", {id, status: "proposed", tab: "triage"});
+      await post("/api/agent_status", {id, status: cleared, tab});
     },
     redo: async () => {
       agentMark(id, action); render();
       if(kind === "complete") await setDone(true);
+      if(kind === "postpone") await applyFields("redo");
       if(kind === "accept"){ await applyFields("redo"); await addSubs(); await doMerge(); }
-      await post("/api/agent_status", {id, status, tab: "triage", changes: r.changes || null,
-                                        proposal: r.proposal || null, verdict: agentVerdict(agentUI[id]),
-                                        decision: {kind, changes: r.changes || null, recipe: r}});
+      await agentPostStatus(id, action);
     },
   };
   return action;
+}
+// The decision record the server keeps (agent_status + agent_decision = undo recipe) — sent on
+// redo and again when a postpone grows (time / repeat added from the date popover).
+async function agentPostStatus(id, action){
+  const r = action.recipe || {};
+  await post("/api/agent_status", {id, status: action.status, tab: r.tab === "active" ? "active" : "triage", changes: r.changes || null,
+                                    proposal: r.proposal || null, verdict: agentVerdict(agentUI[id]),
+                                    decision: {kind: action.kind, changes: r.changes || null, recipe: r}});
 }
 // The proposal in effect for a card: the user's edited copy if any, else the agent's original.
 function agentProposal(t){
@@ -355,15 +451,16 @@ function renderAgentPanel(row){
   // B3: agent away → the panel keeps working for standard actions + round close; agent actions wait.
   // A batch already sent simply waits in the DB (decision 1) — say so on the strip.
   const strip = off ? `<div class="kp-offline" id="kp-offline"><span class="kp-dot off"></span><b>${esc(tr("agent.offline_title"))}</b><span>${esc(tr("agent.offline_body"))}</span>${agentInfo.queued ? `<span class="wait">${esc(tr("agent.queue_waiting", {n: agentInfo.queued}))}</span>` : ""}</div>` : "";
-  const triage = agentTriageTasks();
-  // drafts left over from tasks that no longer carry a proposal (decided elsewhere) → drop
+  const pools = agentPools(), triage = pools.triage, act = pools.act;
+  // drafts left over from tasks that left both tabs (decided elsewhere, no longer due) → drop
   Object.keys(agentUI).forEach(id => {
     const ui = agentUI[id];
-    if(!ui.decided && !triage.some(t => t.id === id)){ delete agentUI[id]; }
+    if(!ui.decided && !triage.some(t => t.id === id) && !act.ids.has(id)){ delete agentUI[id]; }
   });
   agentDraftsSave();
   const nTri = triage.filter(t => !(agentUI[t.id] && agentUI[t.id].decided)).length;
-  const f = agentFooterInfo(triage);
+  const nAct = act.pending;
+  const f = agentFooterInfo(pools);
   let body;
   if(agentInfo.busy){
     body = `<div class="kp-proc" id="kp-proc"><b><span class="spin"></span>${esc(tr("agent.processing"))}</b>${esc(tr("agent.processing_sub", {n: agentSentN || agentInfo.queued || 0}))}</div>`;
@@ -373,7 +470,10 @@ function renderAgentPanel(row){
            <div class="kp-legend">${esc(tr("agent.legend_triage"))}</div>
            <div id="kp-cards">${triage.length ? triage.map(agentTriageCard).join("") : `<div class="kp-empty">${esc(tr("agent.empty_triage"))}</div>`}</div>
          </section>`
-      : `<section class="kp-pane" id="pane-active"><div id="kt-list"><div class="kp-empty">${esc(tr("agent.empty_active"))}</div></div></section>`;
+      : `<section class="kp-pane" id="pane-active">
+           <div class="kp-legend">${esc(tr("agent.legend_active"))}</div>
+           <div id="kt-list">${agentActiveList(act)}</div>
+         </section>`;
     body = pane + `<div class="kp-submit" id="kp-footer">
         <span id="kp-summary">${esc(f.summary)}</span>
         <button class="kp-send" id="kp-send" onclick="agentSend()" ${f.disabled ? "disabled" : ""}>${esc(f.label)}</button>
@@ -381,12 +481,12 @@ function renderAgentPanel(row){
   }
   row.innerHTML = `<div class="list-wrap kp-wrap ${off ? "offline" : ""}">${strip}
     <div class="kp-tabs ${agentInfo.busy ? "locked" : ""}" role="tablist">
-      <button class="kp-tab ${agentTab === "active" ? "active" : ""}" id="tab-active" onclick="agentSetTab('active')">${esc(tr("agent.tab_active"))} <span class="kp-tab-n">0</span></button>
+      <button class="kp-tab ${agentTab === "active" ? "active" : ""}" id="tab-active" onclick="agentSetTab('active')">${esc(tr("agent.tab_active"))} <span class="kp-tab-n ${nAct ? "sage" : ""}">${nAct}</span></button>
       <button class="kp-tab ${agentTab === "triage" ? "active" : ""}" id="tab-triage" onclick="agentSetTab('triage')">${esc(tr("agent.tab_triage"))} <span class="kp-tab-n ${nTri ? "sage" : ""}">${nTri}</span></button>
     </div>${body}</div>`;
   row.querySelectorAll("textarea.cm.show").forEach(t => { t.style.height = "auto"; t.style.height = t.scrollHeight + "px"; });
 }
-function agentSetTab(t){ agentTab = t; render(); }
+function agentSetTab(t){ agentTab = t === "triage" ? "triage" : "active"; try { localStorage.setItem("agent_tab", agentTab); } catch(_){} render(); }
 
 function agentTriageCard(t){
   const ui = agentUI[t.id] || {};
@@ -467,9 +567,9 @@ function agentFlag(id){
 }
 // The one button: „გადაამოწმე (N)" when something goes to the agent; „დაასრულე" when only
 // decisions (accept / deferred delete) wait for the round to close; disabled when neither.
-function agentFooterInfo(triage){
+function agentFooterInfo(pools){
   const items = agentItemsToSend(); const n = items.active.length + items.triage.length;
-  const pool = triage || agentTriageTasks();
+  const pool = (pools || agentPools()).all;
   const decided = pool.filter(t => agentUI[t.id] && agentUI[t.id].decided).length;
   // B3 offline: nothing goes to the agent now — the button only closes the round („დაასრულე"),
   // and only when a decision that the close acts on exists (split marks wait for the agent)
@@ -609,22 +709,23 @@ async function agentUndo(id){
     const i = undoStack.indexOf(ui.action); if(i >= 0){ undoStack.splice(i, 1); updateUndoButtons(); }
     await ui.action.undo();
   } else {
+    const tab = ui.tab === "active" ? "active" : "triage";
     agentUnmark(id); render();
-    await post("/api/agent_status", {id, status: "proposed", tab: "triage"});
+    await post("/api/agent_status", {id, status: tab === "active" ? "" : "proposed", tab});
   }
 }
 // დაშალე — a mark for the agent (goes with „გადაამოწმე"); persisted server-side like the rest.
 async function agentSplit(id){
   if(agentOffline()){ showToast(tr("agent.offline_locked"), "warn", 3000); return; }
   const t = agentTask(id); if(!t) return;
-  await agentActionFor(id, "split", {}).redo();
+  await agentActionFor(id, "split", agentBase(id)).redo();
 }
 // წაშალე — DEFERRED (A2): the task is only marked (agent_status deleted_pending) and hidden
 // from the app; the card stays in place with „უკან" until the round closes, when the real
 // task_delete runs (agentRoundClose). Undo before that = clear the mark, nothing else changed.
 async function agentDelete(id){
   const t = agentTask(id); if(!t) return;
-  const action = agentActionFor(id, "delete", { text: t.text });
+  const action = agentActionFor(id, "delete", Object.assign(agentBase(id), { text: t.text }));
   await action.redo();
   recordAction(action);
 }
@@ -633,10 +734,227 @@ async function agentDelete(id){
 // in place, dimmed, undoable (completed=false) until the round closes. Nothing else is written.
 async function agentComplete(id){
   const t = T(id); if(!t || t.completed) return;
-  const action = agentActionFor(id, "complete", { text: t.text, proposal: agentProposal(t) });
+  const base = agentBase(id);
+  const action = agentActionFor(id, "complete", Object.assign(base, { text: t.text, proposal: base.tab === "active" ? null : agentProposal(t) }));
   await action.redo();
   recordAction(action);
 }
+
+/* ---- tab 1 decisions ---- */
+// ნაწილობრივ / დატოვე — nothing changes on the task; the status is the record (the agent reads it
+// in the log). The card dims with its verdict until the round closes.
+async function agentPartial(id){
+  const t = T(id); if(!t) return;
+  const action = agentActionFor(id, "partial", Object.assign(agentBase(id), { text: t.text }));
+  await action.redo(); recordAction(action);
+}
+async function agentKeep(id){
+  const t = T(id); if(!t) return;
+  const action = agentActionFor(id, "keep", Object.assign(agentBase(id), { text: t.text }));
+  await action.redo(); recordAction(action);
+}
+// გადადება ▾ — writes the due at once (the app's own /api/update) and bumps the Todoist label
+// "(+n)" (Lasha: the counter must be visible on the phone). when = tomorrow | days (+3) | week |
+// month | someday (date cleared → time + recurrence go too, like the app) | date (ISO from the popover).
+// Intervention: the 5th postpone OR an overdue age ≥ 30 days (Kiki Q2) — when a DATE is chosen
+// (someday is one of the block's own answers) the block shows first; „მაინც გადადე" = force.
+// `extra` = {field, value} from the popover's time / repeat sub-picker when it comes before the date.
+function agentWhenDate(when){
+  const d = new Date();
+  if(when === "tomorrow") d.setDate(d.getDate() + 1);
+  else if(when === "days") d.setDate(d.getDate() + 3);
+  else if(when === "week") d.setDate(d.getDate() + 7);
+  else if(when === "month") d.setMonth(d.getMonth() + 1);
+  else return "";
+  return iso(d);
+}
+function agentWhenLabel(r){
+  if(r.when === "date") return r.date ? fmtDate(r.date) + (r.fields || []).filter(f => f.field === "due_time" && f.newVal).map(f => " " + f.newVal).join("") : tr("agent.when_someday");
+  return tr("agent.when_" + (r.when || "someday"));
+}
+async function agentPostpone(id, when, date, force, extra){
+  const t = T(id); if(!t) return;
+  const ui = agentUI[id];
+  if(ui && ui.decided) return;
+  const n = (t.postpone_count || 0) + 1, age = agentOverdueDays(t);
+  const newDate = when === "date" ? (date || "") : agentWhenDate(when);
+  if(!force && newDate && (n >= 5 || age >= 30)){       // intervention first — the answer buttons decide
+    const u = agentUiFor(id, "active"); u.esc = { when, date: newDate, extra: extra || null, n, age };
+    render(); return;
+  }
+  const fields = [];
+  const push = (field, oldVal, newVal) => { if(JSON.stringify(oldVal) !== JSON.stringify(newVal)) fields.push({field, oldVal, newVal}); };
+  push("due_date", t.due_date || "", newDate);
+  if(!newDate){ push("due_time", t.due_time || "", ""); push("due_string", isRecurrenceStr(t.due_string) ? t.due_string : "", ""); }
+  const changes = { due: newDate || "—" };
+  if(extra && extra.field === "due_time"){ push("due_time", t.due_time || "", extra.value || ""); changes.due = (newDate || "—") + (extra.value ? " " + extra.value : ""); }
+  if(extra && extra.field === "due_string"){ push("due_string", isRecurrenceStr(t.due_string) ? t.due_string : "", extra.value || ""); changes.due_string = extra.value || "—"; }
+  const labels = (t.chosen_labels || []).filter(l => !AGENT_POSTPONE_RE.test(l)).concat(["(+" + n + ")"]);
+  push("chosen_labels", t.chosen_labels || [], labels);
+  const action = agentActionFor(id, "postpone", Object.assign(agentBase(id), { fields, when, date: newDate, n, changes, text: t.text }));
+  await action.redo();
+  recordAction(action);
+}
+// The date popover on „თარიღი…": date decides (postpone); time / repeat before the date = postpone
+// to the task's own date (today when undated) carrying that field; anything picked after the
+// decision grows the same decision (one card, one decision — still one undo).
+async function agentPostponeField(id, field, value){
+  const t = T(id); if(!t) return;
+  const ui = agentUI[id];
+  if(ui && ui.decided){
+    if(ui.kind === "postpone" && ui.action) await agentPostponeAppend(id, field, value);
+    return;
+  }
+  if(field === "due_date"){ closeAllPopovers(); await agentPostpone(id, "date", value, false); return; }
+  await agentPostpone(id, "date", (t.due_date || "").slice(0, 10) || todayISO(), false, { field, value });
+}
+async function agentPostponeAppend(id, field, value){
+  const ui = agentUI[id], r = ui.action.recipe, cur = T(id); if(!cur) return;
+  value = value || "";
+  const oldVal = field === "due_string" ? (isRecurrenceStr(cur.due_string) ? cur.due_string : "") : (cur[field] || "");
+  if(oldVal === value) return;
+  r.fields = r.fields || []; r.fields.push({field, oldVal, newVal: value});
+  cur[field] = value;
+  await post("/api/update", {id, field, value});
+  r.changes = r.changes || {};
+  if(field === "due_date"){ r.date = value; r.changes.due = (value || "—") + (cur.due_time ? " " + cur.due_time : ""); }
+  if(field === "due_time") r.changes.due = ((cur.due_date || "").slice(0, 10) || "—") + (value ? " " + value : "");
+  if(field === "due_string") r.changes.due_string = value || "—";
+  ui.changes = r.changes;
+  await agentPostStatus(id, ui.action);
+  render();
+}
+function agentPickPostponeDate(id){
+  const t = T(id); if(!t) return;
+  datePickCurrent = (t.due_date || "").slice(0, 10);
+  repeatAnchorISO = datePickCurrent;
+  timePickTz = t.due_timezone || "";
+  calYear = calMonth = undefined;
+  openDatePicker("ag-pp-" + id,
+    date => agentPostponeField(id, "due_date", date || ""),
+    time => agentPostponeField(id, "due_time", time || ""),
+    t.due_time || "",
+    rs => agentPostponeField(id, "due_string", rs || ""),
+    isRecurrenceStr(t.due_string) ? t.due_string : "");
+}
+// intervention answers
+function agentEscAnyway(id){ const ui = agentUI[id]; if(!ui || !ui.esc) return; const e = ui.esc; ui.esc = null; agentPostpone(id, e.when, e.date, true, e.extra); }
+function agentEscSomeday(id){ const ui = agentUI[id]; if(ui) ui.esc = null; agentPostpone(id, "someday", "", true); }
+function agentEscSplit(id){ if(agentOffline()){ showToast(tr("agent.offline_locked"), "warn", 3000); return; } const ui = agentUI[id]; if(ui) ui.esc = null; agentSplit(id); }
+function agentEscDelete(id){ const ui = agentUI[id]; if(ui) ui.esc = null; agentDelete(id); }
+function agentEscClose(id){ const ui = agentUI[id]; if(ui) ui.esc = null; render(); }
+// გადაიტანე… — a plain project/section edit through the app's own upd() (its own undo step);
+// the card stays open — moving does not decide an active task (Kiki Q2: the most common fix).
+function agentPickMove(btn, id){
+  const t = T(id); if(!t) return;
+  closeAllPopovers();
+  const m = document.createElement("div");
+  m.id = "project-popover"; m.className = "labels-popover";
+  let rows = "";
+  projects.forEach(p => {
+    const on = t.project === p && !t.section;
+    rows += `<div class="prio-option" onclick="event.stopPropagation(); agentMoveTo('${id}','${esc(p)}','')">
+      <span class="pflag" style="color:${projColor(p)}">${SVG.hash}</span><span class="pname">${esc(p)}</span>${on ? `<span class="pcheck">✓</span>` : ""}</div>`;
+    (projectSections[p] || []).forEach(sec => {
+      const onS = t.project === p && t.section === sec;
+      rows += `<div class="prio-option" style="padding-left:28px" onclick="event.stopPropagation(); agentMoveTo('${id}','${esc(p)}','${esc(sec)}')">
+        <span class="pname">${esc(sec)}</span>${onS ? `<span class="pcheck">✓</span>` : ""}</div>`;
+    });
+  });
+  m.innerHTML = rows;
+  document.body.appendChild(m);
+  positionPopover(m, btn.getBoundingClientRect());
+}
+function agentMoveTo(id, project, section){
+  const t = T(id); if(!t) return;
+  if(t.project !== project){ upd(id, "project", project); upd(id, "section", section || ""); }
+  else if((t.section || "") !== (section || "")) upd(id, "section", section || "");
+  closeAllPopovers(); render();
+}
+/* ---- tab 1 menus ---- */
+function agentMenuWhen(btn, id){
+  agentMenu(btn, [
+    { label: tr("agent.when_tomorrow"), ico: "tomorrow", fn: () => agentPostpone(id, "tomorrow") },
+    { label: tr("agent.when_days"),     ico: "days",     fn: () => agentPostpone(id, "days") },
+    { label: tr("agent.when_week"),     ico: "week",     fn: () => agentPostpone(id, "week") },
+    { label: tr("agent.when_month"),    ico: "month",    fn: () => agentPostpone(id, "month") },
+    { label: tr("agent.when_someday"),  ico: "someday",  fn: () => agentPostpone(id, "someday") },
+    { label: tr("agent.when_date"),     ico: "date",     fn: () => agentPickPostponeDate(id) },
+  ]);
+}
+function agentMenuMoreActive(btn, id){
+  agentMenu(btn, [
+    { label: tr("agent.more_partial"), ico: "part",  fn: () => agentPartial(id) },
+    { label: tr("agent.more_split"),   ico: "split", fn: () => agentSplit(id), disabled: agentOffline(), title: tr("agent.offline_locked") },
+    { label: tr("agent.more_move"),    ico: "move",  fn: () => agentPickMove(btn, id) },
+    { label: tr("agent.more_delete"),  ico: "trash", fn: () => agentDelete(id) },
+    { label: tr("agent.more_keep"),    ico: "keep",  fn: () => agentKeep(id) },
+  ]);
+}
+/* ---- tab 1 card ---- */
+function agentActiveCard(t){
+  const ui = agentUI[t.id] || {};
+  const done = !!ui.decided, off = agentOffline();
+  const due = (t.due_date || "").slice(0, 10), today = todayISO();
+  const grp = agentGroupOf(t);
+  const dcls = !due ? "" : due < today ? "over" : due === today ? "today" : grp === "tom" ? "tom" : "fut";
+  const rep = isRecurrenceStr(t.due_string);
+  const age = agentOverdueDays(t);
+  const n = t.postpone_count || 0;
+  const labels = (t.chosen_labels || []).filter(l => !AGENT_POSTPONE_RE.test(l));
+  const proj = (t.project || "") + (t.section ? " / " + t.section : "");
+  const hasFile = (t.comments || []).some(c => c.attachment);
+  const cm = ui.comment || "", cmOpen = ui.cmOpen || !!cm.trim();
+  const pcls = ["P1","P2","P3"].includes(t.priority) ? t.priority.toLowerCase() : "";
+  const e = ui.esc;
+  const escTxt = e ? (e.n >= 5 ? tr("agent.esc_count", {n: e.n}) : tr("agent.esc_age", {n: e.age})) : "";
+  return `<div class="kt ${done ? "done" : ""} ${ui.flag ? "flagged" : ""} ${t.sticky ? "pinned" : ""} ${e ? "esc-on" : ""}" id="kt-${t.id}">
+    <button class="chk ${pcls}" title="${esc(tr("agent.complete"))}" onclick="agentComplete('${t.id}')">${AG_ICO.check}</button>
+    <div class="body">
+      <div class="ttl">${esc(t.text)}${hasFile ? AG_ICO.clip : ""}</div>
+      <div class="tags">
+        ${due ? `<span class="d ${dcls}">${rep ? AG_ICO.repeat : ""}${esc(fmtDate(due))}${t.due_time ? " " + esc(t.due_time) : ""}</span>` : ""}
+        ${age ? `<span class="age ${age >= 30 ? "max" : age >= 7 ? "warn" : ""}">${esc(tr("agent.age_days", {n: age}))}</span>` : ""}
+        ${proj ? `<span class="proj">${esc(proj)}</span>` : ""}
+        ${labels.map(l => `<span>@${esc(l)}</span>`).join("")}
+        ${n ? `<span class="cnt ${n >= 5 ? "max" : ""}">@(+${n})</span>` : ""}
+      </div>
+      <textarea class="cm ${cmOpen ? "show" : ""}" id="cm-${t.id}" rows="1" placeholder="${esc(tr("agent.comment_ph"))}" oninput="agentCm('${t.id}',this)" ${off ? "readonly" : ""}>${esc(cm)}</textarea>
+      ${e ? `<div class="esc show">${esc(escTxt)}
+        <div class="sub">
+          <button onclick="agentEscSplit('${t.id}')" ${off ? `disabled title="${esc(tr("agent.offline_locked"))}"` : ""}>${esc(tr("agent.esc_split"))}</button>
+          <button onclick="agentEscSomeday('${t.id}')">${esc(tr("agent.esc_someday"))}</button>
+          <button class="warn" onclick="agentEscDelete('${t.id}')">${esc(tr("agent.esc_delete"))}</button>
+          <button onclick="agentEscAnyway('${t.id}')">${esc(tr("agent.esc_anyway"))}</button>
+          <button class="x" onclick="agentEscClose('${t.id}')" title="${esc(tr("agent.undo"))}">${AG_ICO.undo}</button>
+        </div></div>` : ""}
+    </div>
+    <div class="acts">
+      <button class="act" id="ag-pp-${t.id}" onclick="event.stopPropagation(); agentMenuWhen(this,'${t.id}')">${esc(tr("agent.postpone"))}${AG_ICO.caret}</button>
+      <button class="act" onclick="event.stopPropagation(); agentMenuMoreActive(this,'${t.id}')">${esc(tr("agent.more"))}${AG_ICO.caret}</button>
+    </div>
+    <div class="dec"><span>${esc(agentVerdict(ui))}</span><button class="undo" title="${esc(tr("agent.undo"))}" onclick="agentUndo('${t.id}')">${AG_ICO.undo}</button></div>
+    <button class="ic cmt ${cmOpen ? "on" : ""}" id="ic-${t.id}" title="${esc(off ? tr("agent.offline_locked") : tr("agent.comment"))}" onclick="agentCmToggle('${t.id}')" ${off ? "disabled" : ""}>${AG_ICO.cmt}</button>
+    <button class="ic flag ${ui.flag ? "on" : ""}" id="fl-${t.id}" title="${esc(off ? tr("agent.offline_locked") : tr("agent.flag"))}" onclick="agentFlag('${t.id}')" ${off ? "disabled" : ""}>${AG_ICO.flag}</button>
+  </div>`;
+}
+function agentActiveList(act){
+  const g = act.groups;
+  if(!act.list.length) return `<div class="kp-empty">${esc(tr("agent.empty_active"))}</div>`;
+  const names = { pin: tr("agent.pinned"), over: tr("agent.overdue"), today: tr("agent.today"), tom: tr("agent.tomorrow") };
+  let html = "";
+  AGENT_GROUPS.forEach(k => {
+    const items = g[k]; if(!items.length) return;
+    let shown = items, more = "";
+    if(k === "over" && items.length > AGENT_OVER_SHOW){
+      if(!agentOverAll){ shown = items.slice(0, AGENT_OVER_SHOW); more = `<button class="kp-more" onclick="agentOverToggle()">${esc(tr("agent.more_show", {n: items.length - AGENT_OVER_SHOW}))}</button>`; }
+      else more = `<button class="kp-more" onclick="agentOverToggle()">${esc(tr("agent.less"))}</button>`;
+    }
+    html += `<div class="kt-day ${k}">${esc(names[k])} <span class="n">${items.length}${k === "pin" ? " / " + STICKY_MAX : ""}</span></div>` + shown.map(agentActiveCard).join("") + more;
+  });
+  return html;
+}
+function agentOverToggle(){ agentOverAll = !agentOverAll; render(); }
 // ვეთანხმები — writes the whole proposal at once (move · priority · due · labels · title ·
 // subtasks · merge) through the app's own endpoints; ONE undo step for all of it.
 async function agentAccept(id){
@@ -676,18 +994,22 @@ async function agentAccept(id){
 /* ---- the one button: „გადაამოწმე (N)" ---- */
 // N = every card (either tab) with an agent action (დაშალე) OR a „?" flag OR a non-empty comment.
 function agentItemsToSend(){
-  const triage = [];
+  const triage = [], active = [];
   Object.keys(agentUI).forEach(id => {
     const ui = agentUI[id];
     const split = ui.decided && ui.kind === "split";
     const cm = (ui.comment || "").trim();
     if(!(split || ui.flag || cm)) return;
     const t = agentTask(id); if(!t) return;
-    triage.push({ task_id: id, action: split ? "split" : null, flag: !!ui.flag,
-                  proposal: agentProposal(t), changes: ui.changes || agentChanges(t) || null,
-                  decision: agentVerdict(ui) || null, comment: cm || null });
+    if(ui.tab === "active")
+      active.push({ task_id: id, action: split ? "split" : null, flag: !!ui.flag,
+                    decision: agentVerdict(ui) || null, comment: cm || null, changes: ui.changes || null });
+    else
+      triage.push({ task_id: id, action: split ? "split" : null, flag: !!ui.flag,
+                    proposal: agentProposal(t), changes: ui.changes || agentChanges(t) || null,
+                    decision: agentVerdict(ui) || null, comment: cm || null });
   });
-  return { active: [], triage };
+  return { active, triage };
 }
 async function agentSend(){
   const f = agentFooterInfo();
@@ -698,7 +1020,7 @@ async function agentSend(){
       const d = await post("/api/agent_queue", { active: f.items.active, triage: f.items.triage, agent: agentInfo.name || "" });
       agentSentN = (d && d.queued) || f.n;
       // sent cards leave the round: their status is now "queued" (server); drop the session marks
-      f.items.triage.forEach(it => { delete agentUI[it.task_id]; });
+      f.items.triage.concat(f.items.active).forEach(it => { delete agentUI[it.task_id]; });
       agentDraftsSave();
       showToast(tr("agent.sent", {n: agentSentN}), "ok", 4000);
     }
@@ -719,10 +1041,10 @@ async function agentRoundClose(toast){
     recordAction({
       label: tr("undo.label_agent_round", {n: deleted.length}),
       undo: async () => {
-        for(const x of deleted){ await post("/api/task_restore", {id: x.id, subs: x.subs || []}); await post("/api/agent_status", {id: x.id, status: "proposed", tab: "triage"}); }
+        for(const x of deleted){ await post("/api/task_restore", {id: x.id, subs: x.subs || []}); await post("/api/agent_status", {id: x.id, status: x.tab === "active" ? "" : "proposed", tab: x.tab || "triage"}); }
       },
       redo: async () => {
-        for(const x of deleted){ await post("/api/agent_status", {id: x.id, status: "deleted_pending", tab: "triage", decision: {kind: "delete", recipe: {text: x.text}}}); }
+        for(const x of deleted){ await post("/api/agent_status", {id: x.id, status: "deleted_pending", tab: x.tab || "triage", decision: {kind: "delete", recipe: {text: x.text, tab: x.tab || "triage"}}}); }
         await post("/api/agent_round_close", {});
         Object.keys(agentUI).forEach(id => { if(agentUI[id].decided && agentUI[id].kind !== "split") delete agentUI[id]; });
       },

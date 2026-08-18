@@ -60,19 +60,25 @@ Proposal schema:
 
 ## 2. Read what the user sent — `GET /api/agent_queue`
 Query: `agent=<name>` · `status=queued|waiting|done|all` (default = not done) · `since=<ISO>`
-(log entries after that moment).
+(log entries after that moment) · `limit=<n>` (log rows; default 500 with `since`, 100 without; max 2000).
 ```json
 { "ok": true, "server_time": "…",
   "agent": { "connected": true, "known": true, "busy": true, "name": "kiki", "last_seen": "…", "last_analysis": "…", "open_batches": ["b89710d261fb"], "queued": 2 },
   "queue": [ { "id": 1, "batch_id": "b89…", "task_id": "…", "tab": "triage|active", "status": "queued",
                "created_at": "…", "item": { "task_id": "…", "action": "split|null", "flag": true, "proposal": {…}, "changes": {…}|null, "decision": "…", "comment": "…"|null } } ],
+  // tab "active" item = the same shape without `proposal`: { task_id, action, flag, decision, comment, changes:{due, due_string}|null }
   "open_batches": ["b89…"],
-  "log": [ { "at": "…", "task_id": "…", "event": "accepted|changed|rejected|undo|queue|done|trigger", "data": {…} } ],
+  "log": [ { "at": "…", "task_id": "…", "event": "accepted|changed|completed|postponed|partial|kept|rejected|split|deleted|undo|queue|done|round_close|trigger", "data": {…} } ],
   "trigger_at": "ISO or '' — the user pressed „ხელახლა გაანალიზე'; consumed once" }
 ```
 - `queue` = agent work: `action:"split"` (დაშალე → add subtasks / re-propose), `flag` („?" — something is off), `comment` (free text). Do it if clear (subtasks via `POST /api/subtask_add {id,text}`, new proposal via `agent_propose`); ask the user in chat if unclear.
 - `log` = what the user decided on standard actions — read it to learn: `accepted` · `changed` (with `changes` diff — keys project · section · priority · due · due_string · labels — **and** `proposal` = the user's edited version) · `completed` („შესრულდა" — the task was already done; `proposal` = what you proposed, so you learn when to send `complete: true`) · `rejected` (data.status `deleted_pending` = marked for deletion, still undoable) · `deleted` (the round closed, the task is really gone) · `undo` (the user took a decision back) · `split` (დაშალე marked; the item itself arrives in `queue` when the user sends) · `queue` · `done` · `round_close` · `trigger`.
-  Every per-task row (`accepted` · `changed` · `completed` · `rejected` · `split` · `undo`) also carries
+  Tab 1 („აქტიური", 2026-08-18) adds `postponed` (data.changes = `{due, due_string?}` — the new due; the
+  Todoist label `(+n)` on the task is the counter; `verdict` names the choice) · `partial` (ნაწილობრივ — the
+  task is untouched, stays open) · `kept` (დატოვე — untouched, dropped from the round). Every per-task row
+  carries `data.tab` = `active|triage`. A move („გადაიტანე…") is a plain edit — no log row, you see it in
+  `data.project`/`data.section` of the next decision, or in `/api/state`.
+  Every per-task row (`accepted` · `changed` · `completed` · `postponed` · `partial` · `kept` · `rejected` · `split` · `undo`) also carries
   `data.text` (task text at decision time) and `data.project` / `data.section` (**resulting** — the panel
   writes its fields before it records the status, so on `accepted`/`changed` this is where the task ended
   up); `deleted` carries `data.text` too — readable after the row is gone (Kiki, 2026-08-17).
@@ -101,8 +107,23 @@ Standard task endpoints you may use: `POST /api/update {id, field, value}`
 
 ## Status values (`task_local.agent_status`)
 `""` · `proposed` · `accepted` · `changed` · `completed` · `rejected` · `split` · `queued` · `done` · `deleted_pending`
-(`deleted_pending` → `rejected` when the round closes; undo before that → `proposed`; `completed` = the
-user pressed „შესრულდა" — the task is checked off in Todoist right away, undo → `proposed` + reopened).
+· `postponed` · `partial` · `kept`
+(`deleted_pending` → `rejected` when the round closes; undo before that → `proposed` on tab 2, `""` on tab 1;
+`completed` = the user pressed „შესრულდა" — the task is checked off in Todoist right away, undo → reopened;
+`postponed` / `partial` / `kept` = tab-1 decisions, see below).
+
+## Which tab shows a card (2026-08-18)
+- **Tab 2 „დაუხარისხებელი"**: `agent_status = proposed` with a proposal, project Inbox, not completed; plus
+  every card decided **on tab 2** in the current round (`agent_decision.recipe.tab != "active"`, status in
+  accepted · changed · completed · split · deleted_pending, `agent_decided_at > round_closed_at`); plus
+  `split` marks not yet sent.
+- **Tab 1 „აქტიური"**: every open top-level task that is pinned (sticky) · overdue · due today · due
+  tomorrow **and is not on tab 2** (one card, one tab — Kiki, 2026-08-17); plus cards decided **on tab 1**
+  in the current round (`recipe.tab = "active"`, status in postponed · partial · kept · completed · split ·
+  deleted_pending) — they stay in their group (`recipe.group` = pin | over | today | tom), dimmed, until the
+  round closes. Tasks with status `queued` (sent to you) show on neither tab until you post `agent_done`.
+- Groups: აპინული (n / 10) · ვადაგადაცილებული (due asc, first 10 + „მეტი…") · დღეს · ხვალ. The card shows
+  the overdue age („N დღე": orange ≥ 7, red ≥ 30) and the postpone counter `@(+n)` (red at 5).
 
 ## The round (how the panel behaves, 2026-08-17)
 Cards never move: the order is frozen when a card first shows, new proposals append at the end.
@@ -115,7 +136,7 @@ the tab. Decisions survive an app restart (they live in the DB, not in the brows
 ## Endpoints the panel itself uses (for completeness)
 `POST /api/agent_status {id, status, changes, verdict, tab, decision, proposal}` (panel records the user's decision) ·
 `POST /api/agent_queue {active:[…], triage:[…], agent}` (the one button; returns `batch_id`) ·
-`POST /api/agent_round_close {}` (returns `{deleted:[{id, subs, text}], closed_at}`) ·
+`POST /api/agent_round_close {}` (returns `{deleted:[{id, subs, text, tab}], closed_at}`) ·
 `POST /api/agent_trigger {}` („ხელახლა გაანალიზე").
 What each panel action writes: ვეთანხმები = `POST /api/update` per changed field (project → section →
 priority → due_date → due_time → due_string → chosen_labels → text → description) + `subtask_add` per subtask +
@@ -124,3 +145,10 @@ with the recipe. შესრულდა = `POST /api/update {id, field:"comple
 synced as `item_complete`) + `agent_status completed`; nothing else is written even when the proposal carries
 other fields. წაშალე = `agent_status deleted_pending` only (real `task_delete` at round close).
 დაშალე = `agent_status split`, item sent with „გადაამოწმე". Undo = the reverse calls + `agent_status proposed`.
+Tab 1: გადადება = `POST /api/update due_date` (+ `due_time` / `due_string` from the date popover; როდესმე
+clears the date and with it time + recurrence) + `chosen_labels` with the old `(+k)` replaced by `(+k+1)`, then
+`agent_status postponed` (recipe.tab active). Intervention: the 5th postpone or an overdue age ≥ 30 days shows
+the block first (დავშალოთ = split · როდესმეში = date cleared · წაშალე = deferred delete · მაინც გადადე = the
+postpone anyway). წრე = `completed=true` + `agent_status completed`. ნაწილობრივ / დატოვე = `agent_status`
+partial / kept only. გადაიტანე… = `update project` (+ `section`) — no status. Undo on tab 1 = the reverse
+calls + `agent_status ""`.

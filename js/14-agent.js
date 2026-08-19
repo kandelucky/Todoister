@@ -110,6 +110,9 @@ const AG_ICO = {
   part:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>',
   split:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v6"/><path d="M12 9c-4 0-6 2-6 6v6"/><path d="M12 9c4 0 6 2 6 6v6"/></svg>',
   trash:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>',
+  key:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+  copy:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>',
+  rotate:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>',
   keep:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="9" y1="5" x2="9" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/></svg>',
   edit:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   check:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
@@ -166,13 +169,83 @@ function agentRenderHeader(){
         conn = tr("agent.duty_sessions", {name: (duty && duty.agent) || agentInfo.name || "", n: agentInfo.sessions});
       }
       const tip = (agentInfo.name || "") + (duty && duty.session ? " · " + duty.session.slice(0, 8) : "");
-      sub.innerHTML = `${esc(la)} · <span class="kp-dot ${agentInfo.connected ? "" : "off"}" title="${esc(tip)}"></span> ${esc(conn)}`;
+      // audit line (Package B): the last write that came in with an agent key
+      const lw = agentInfo.last_write;
+      const lwHtml = lw && lw.agent
+        ? ` · <span class="kp-lw" title="${esc(lw.text || lw.id || "")}">${esc(tr("agent.last_write", {name: lw.agent, time: (lw.at || "").slice(11, 16), what: lw.path || ""}))}</span>`
+        : "";
+      sub.innerHTML = `${esc(la)} · <span class="kp-dot ${agentInfo.connected ? "" : "off"}" title="${esc(tip)}"></span> ${esc(conn)}${lwHtml}`;
     }
   }
   if(btn){
     btn.style.display = on ? "" : "none";
     btn.disabled = !agentInfo.connected || agentInfo.busy;
   }
+  const kb = document.getElementById("agent-keys-btn");
+  if(kb) kb.style.display = on ? "" : "none";
+}
+
+/* ---- access keys dialog (Package B, apikeys.py): who may talk to this Todoister ---- */
+let _agentKeysDir = "";
+async function agentKeysDialog(){
+  let d = {keys: [], dir: ""};
+  try { const r = await fetch("/api/keys"); d = await r.json(); } catch(_){}
+  _agentKeysDir = d.dir || "";
+  _agentKeysRender(d.keys || [], null);
+}
+function _agentKeysRender(keys, fresh){
+  const rows = (keys || []).map(k => `
+    <div class="kp-key-row">
+      <span class="nm">${esc(k.name)}</span>
+      <span class="sc ${esc(k.scope)}">${esc(tr("agent.keys_scope_" + k.scope))}</span>
+      <span class="lu" title="${esc(k.last_used_at || "")}">${k.last_used_at ? esc(tr("agent.keys_last_used", {time: k.last_used_at.slice(8, 10) + "." + k.last_used_at.slice(5, 7) + " " + k.last_used_at.slice(11, 16)})) : esc(tr("agent.keys_never_used"))}</span>
+      <button class="kp-key-ic" title="${esc(tr("agent.keys_copy"))}" onclick="agentKeyCopy('${esc(k.name)}')">${AG_ICO.copy}</button>
+      <button class="kp-key-ic" title="${esc(tr("agent.keys_rotate"))}" onclick="agentKeyRotate('${esc(k.name)}','${esc(k.scope)}')">${AG_ICO.rotate}</button>
+      <button class="kp-key-ic danger" title="${esc(tr("agent.keys_revoke"))}" onclick="agentKeyRevoke('${esc(k.name)}')">${AG_ICO.trash}</button>
+    </div>`).join("");
+  _openDialog(`
+    <div class="pd-head">${esc(tr("agent.keys_title"))}</div>
+    <div class="pd-body">
+      <p class="pd-msg">${esc(tr("agent.keys_body"))}</p>
+      <div class="kp-keys">${rows || `<p class="pd-note">${esc(tr("agent.keys_empty"))}</p>`}</div>
+      <p class="pd-note">${esc(tr("agent.keys_dir", {dir: _agentKeysDir}))}</p>
+      ${fresh ? `<div class="kp-key-fresh"><div class="t">${esc(tr("agent.keys_fresh", {name: fresh.name}))}</div><code>${esc(fresh.key)}</code><div class="pd-note">${esc(fresh.file)}</div></div>` : ""}
+      <div class="kp-key-new">
+        <input id="kp-key-name" class="pd-input" type="text" maxlength="32" placeholder="${esc(tr("agent.keys_name_ph"))}" onkeydown="if(event.key==='Enter'){event.preventDefault();agentKeyMake();}">
+        <select id="kp-key-scope" class="pd-input">
+          <option value="full">${esc(tr("agent.keys_scope_full"))}</option>
+          <option value="panel">${esc(tr("agent.keys_scope_panel"))}</option>
+        </select>
+        <button class="pd-btn primary" onclick="agentKeyMake()">${esc(tr("agent.keys_new"))}</button>
+      </div>
+    </div>
+    <div class="pd-foot"><button class="pd-btn cancel" onclick="_resolveConfirm(false)">${esc(tr("common.close"))}</button></div>`);
+}
+async function agentKeyMake(){
+  const inp = document.getElementById("kp-key-name"), sel = document.getElementById("kp-key-scope");
+  const name = (inp && inp.value || "").trim(), scope = sel ? sel.value : "full";
+  if(!/^[A-Za-z0-9._-]{1,32}$/.test(name)){ showToast(tr("agent.keys_bad_name"), "", 3500); return; }
+  const d = await post("/api/keys_make", {name, scope});
+  if(d && d.key) _agentKeysRender(d.keys, {name, key: d.key, file: d.file});
+}
+async function agentKeyRotate(name, scope){
+  const ok = await uiConfirm({title: tr("agent.keys_rotate_q", {name}), body: tr("agent.keys_rotate_body"), ok: tr("agent.keys_rotate")});
+  if(!ok){ agentKeysDialog(); return; }
+  const d = await post("/api/keys_make", {name, scope: scope || "full"});
+  if(d && d.key) _agentKeysRender(d.keys, {name, key: d.key, file: d.file}); else agentKeysDialog();
+}
+async function agentKeyRevoke(name){
+  const ok = await uiConfirm({title: tr("agent.keys_revoke_q", {name}), body: tr("agent.keys_revoke_body"), ok: tr("agent.keys_revoke")});
+  if(!ok){ agentKeysDialog(); return; }
+  const d = await post("/api/keys_revoke", {name});
+  _agentKeysRender(d && d.keys || [], null);
+}
+async function agentKeyCopy(name){
+  const d = await post("/api/keys_read", {name});
+  const key = d && d.key || "";
+  if(!key){ showToast(tr("agent.keys_file_missing"), "", 4000); return; }
+  try { await navigator.clipboard.writeText(key); showToast(tr("agent.keys_copied", {name}), "ok", 3000); }
+  catch(_){ _agentKeysRender(await (await fetch("/api/keys")).json().then(x => x.keys), {name, key, file: d.file}); }
 }
 function agentPendingCount(){
   // cards awaiting a decision on both tabs

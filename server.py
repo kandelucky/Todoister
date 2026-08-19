@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import sync as sync_mod
 import nb_files
 import agent_panel
+import apikeys
 # Access via sync_mod.TOKEN so reload_token() takes effect at runtime
 import gcal
 import gcal_api
@@ -64,8 +65,57 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _authorize(self, method):
+        """Access control (apikeys.py, Package B 2026-08-18): every request needs a key —
+        Bearer header / ?token= / the app's cookie. Returns the identity dict, or None after
+        having answered (entry page · 401 · 403). Sets self.ident and self._set_cookie."""
+        path = self.path.split("?")[0]
+        self.ident = None
+        self._set_cookie = ""
+        if path in apikeys.OPEN_PATHS:
+            self.ident = {"name": "open", "scope": "open", "via": "open"}
+            return self.ident
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        conn = db() if os.path.exists(DB_PATH) else None
+        try:
+            with _lock:
+                ident = apikeys.identify(conn, self.headers, qs)
+                if ident is None and path in apikeys.ENTRY_PATHS:
+                    ident = apikeys.entry_key(conn, qs)
+                    if ident:
+                        self._set_cookie = apikeys.cookie_header(ident["key"])
+                if conn is not None:
+                    conn.commit()
+        finally:
+            if conn is not None:
+                conn.close()
+        if ident is None:
+            if path in apikeys.ENTRY_PATHS:
+                body = apikeys.ENTRY_PAGE.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self._json(401, {"error": "unauthorized", "hint": "Authorization: Bearer <key> — see AGENT-API.md"})
+            return None
+        if not apikeys.allowed(ident, method, path):
+            self._json(403, {"error": "forbidden", "scope": ident["scope"], "path": path})
+            return None
+        self.ident = ident
+        return ident
+
+    def _cookie(self):
+        """Send the Set-Cookie header when this request came in with a valid ?t= (entry pages)."""
+        if getattr(self, "_set_cookie", ""):
+            self.send_header("Set-Cookie", self._set_cookie)
+
     def do_GET(self):
         path = self.path.split("?")[0]
+        if not self._authorize("GET"):
+            return
         if path == "/favicon.ico":
             # Browsers auto-request this; serve the app icon (or 204) to keep the console clean.
             ico = os.path.join(BASE, "assets", "icon.ico")
@@ -86,6 +136,7 @@ class Handler(BaseHTTPRequestHandler):
             with open(ONBOARDING_HTML, "rb") as f:
                 body = f.read()
             self.send_response(200)
+            self._cookie()
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -125,6 +176,7 @@ class Handler(BaseHTTPRequestHandler):
             # stay visible and the avatar offers "Connect" to reconnect.
             if not os.path.exists(DB_PATH):
                 self.send_response(302)
+                self._cookie()
                 self.send_header("Location", "/onboarding")
                 self.end_headers()
                 return
@@ -141,6 +193,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             self.send_response(200)
+            self._cookie()
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
@@ -152,11 +205,19 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/agent_queue":
             # AI agent panel: the agent's poll (also its heartbeat) — agent_panel.py
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            params = {k: v[0] for k, v in qs.items()}
+            if apikeys.is_agent(self.ident):
+                params["_agent"] = self.ident["name"]        # the key proves the name
             with _lock:
                 with db() as conn:
-                    resp = agent_panel.get_queue(conn, {k: v[0] for k, v in qs.items()})
+                    resp = agent_panel.get_queue(conn, params)
                     conn.commit()
             self._json(200, resp)
+        elif path == "/api/keys":
+            # access keys (apikeys.py) — the app's key dialog; never returns the keys themselves
+            with _lock:
+                with db() as conn:
+                    self._json(200, {"keys": apikeys.list_keys(conn), "dir": apikeys.KEYS_DIR})
         elif path == "/oauth/callback":
             # Google OAuth loopback redirect (full-sync authorization).
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -737,6 +798,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
+        if not self._authorize("POST"):
+            return
         if path == "/api/upload":
             return self._handle_upload()
         if path == "/api/upload_url":
@@ -763,10 +826,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "bad json"})
         self.added_id = None
         self.deleted_ids = None
+        agent_name = self.ident["name"] if apikeys.is_agent(self.ident) else ""
+        if agent_name:
+            body["_agent"] = agent_name                    # the key proves the name (agent_panel)
         with _lock:
             with db() as conn:
                 try:
                     ok = self._handle(conn, path, body)
+                    if ok and agent_name:
+                        agent_panel.note_agent_write(conn, agent_name, path, body)   # audit line
                     if ok:
                         conn.commit()
                 except Exception as e:
@@ -795,6 +863,18 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/agent_"):
             # AI agent panel endpoints live in agent_panel.py (returns True / dict / False)
             return agent_panel.handle_post(conn, path, body)
+
+        if path == "/api/keys_make":
+            # access keys (apikeys.py): create / rotate an agent key → also written to agent-keys/<name>.key
+            key = apikeys.make_key(conn, body.get("name"), body.get("scope") or "full")
+            log_action(f"[{now()}] keys: '{body.get('name')}' ({body.get('scope') or 'full'}) created/rotated")
+            return {"key": key, "file": apikeys.key_file(body.get("name")), "keys": apikeys.list_keys(conn)}
+        if path == "/api/keys_revoke":
+            okr = apikeys.revoke_key(conn, body.get("name"))
+            log_action(f"[{now()}] keys: '{body.get('name')}' revoked" if okr else f"[{now()}] keys: revoke '{body.get('name')}' — not found")
+            return {"revoked": okr, "keys": apikeys.list_keys(conn)}
+        if path == "/api/keys_read":
+            return {"key": apikeys.read_key(body.get("name")), "file": apikeys.key_file(body.get("name"))}
 
         if path == "/api/sync_discard_dead":
             # Drop the commands Todoist rejected for good (pending_ops.dead=1, see

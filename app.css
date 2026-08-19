@@ -1769,6 +1769,20 @@
   .kp-dot{width:8px; height:8px; border-radius:50%; background:var(--today); display:inline-block;} .kp-dot.off{background:var(--text-3);}
   .kp-hdr-btn{display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:var(--r); color:var(--text-2); font-size:13px;}
   .kp-hdr-btn:hover{background:var(--hover); color:var(--text);} .kp-hdr-btn svg{width:15px; height:15px;}
+  /* audit line + access keys dialog (Package B) */
+  .kp-lw{color:var(--text-3);}
+  .kp-keys{display:flex; flex-direction:column; gap:6px; margin:10px 0 6px;}
+  .kp-key-row{display:grid; grid-template-columns:minmax(60px,1fr) auto minmax(90px,auto) auto auto auto; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--border); border-radius:var(--r); font-size:13px;}
+  .kp-key-row .nm{font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .kp-key-row .sc{font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--border); color:var(--text-2);}
+  .kp-key-row .sc.full{border-color:var(--cal); color:var(--cal);}
+  .kp-key-row .lu{color:var(--text-3); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .kp-key-ic{display:inline-flex; width:26px; height:26px; align-items:center; justify-content:center; border-radius:6px; color:var(--text-2);}
+  .kp-key-ic:hover{background:var(--hover); color:var(--text);} .kp-key-ic.danger:hover{color:var(--danger, #e05a5a);} .kp-key-ic svg{width:14px; height:14px;}
+  .kp-key-fresh{margin:8px 0; padding:8px 10px; border:1px dashed var(--cal); border-radius:var(--r);}
+  .kp-key-fresh .t{font-size:12px; color:var(--text-2); margin-bottom:4px;}
+  .kp-key-fresh code{display:block; font-size:12px; word-break:break-all; user-select:all; padding:4px 0;}
+  .kp-key-new{display:flex; gap:8px; align-items:center; margin-top:10px;} .kp-key-new .pd-input{margin:0;} .kp-key-new input{flex:1 1 auto; min-width:0; width:auto;} .kp-key-new select{flex:0 0 auto; width:auto;} .kp-key-new .pd-btn{flex:0 0 auto; white-space:nowrap;}
   .kp-hdr-btn:disabled{opacity:.4; cursor:default;}
   /* layout */
   .kp-wrap{max-width:820px; width:100%;}

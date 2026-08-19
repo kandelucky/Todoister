@@ -15,6 +15,7 @@ import uuid
 
 import sync as sync_mod
 import agent_panel
+import apikeys
 # Access via sync_mod.TOKEN so reload_token() takes effect at runtime
 
 from paths import RES_DIR, DATA_DIR
@@ -169,6 +170,8 @@ def ensure_schema():
         sync_mod.ensure_pending_ops_schema(conn)
         # AI agent panel (agent_panel.py): task_local.agent_* + agent_queue / agent_log
         agent_panel.ensure_agent_schema(conn)
+        # access control (apikeys.py): api_keys + migration key for the known agent
+        apikeys.ensure_schema(conn)
 
 
 def get_setting(conn, key, default=None):

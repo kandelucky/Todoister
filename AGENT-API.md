@@ -9,6 +9,28 @@ and receives what the user sends back with „გადაამოწმე (N)
 Cloud chat UIs (ChatGPT / Gemini web) cannot reach localhost — do not tunnel Todoister to the
 internet for them.
 
+## Access — every call needs a key (2026-08-18, Kiki's letter №2 §5, Lasha's yes)
+Todoister's server accepts nothing without a key any more (before: any process on the PC could read
+and delete everything). Honest limit that stays: a local process running with the user's rights can
+read the DB and the key files — the barrier is against accidental / self-declared access and against
+browser pages, and it is the precondition for any tunnel talk later.
+- **Your key lives in a file:** `<data dir>/agent-keys/<name>.key` (dev: `megi/triage/agent-keys/kiki.key`;
+  installed app: `%APPDATA%\Todoister\agent-keys\`). Read it at start; send it on **every** call:
+  `Authorization: Bearer <key>` (`?token=<key>` also works, e.g. for a plain browser/`curl`).
+- **The key proves the name.** The server takes your `agent` name from the key — a self-declared
+  `agent=` that differs is ignored. Presence, duty lease, `agent_log`, the audit line and the panel
+  header all use that name.
+- **Scopes:** `full` (everything the app itself can do) · `panel` (only: `GET /api/state` ·
+  `GET /api/agent_queue` · `GET /api/attachment` · `GET /api/completed` · `POST /api/agent_propose` ·
+  `agent_done` · `agent_take`). Lasha makes / rotates / revokes keys in the app (panel header → key
+  icon); the known agent (`kiki`) got a `full` key by migration on the first start after this change.
+- Answers: `401 {error:"unauthorized"}` = no / unknown / revoked key · `403 {error:"forbidden", scope, path}`
+  = the key's scope does not cover that path. A rotated key stops at once — re-read the file.
+- **Audit line:** every successful POST that came with an agent key is noted (`agent.last_write =
+  {agent, at, path, id, text}` in `/api/state`) and shown in the panel header („ბოლო ჩაწერა: kiki 07:32 update").
+- Open without a key: `/oauth/callback` (Google's loopback; has its own `state` check), `/favicon.ico`.
+  The entry pages (`/`, `/onboarding`) without a key answer a plain "open Todoister from the app" page — no data.
+
 ## Presence — how the panel knows you are there
 `GET /api/agent_queue?agent=<name>` is your poll **and** your heartbeat. Poll every 20–30 s.
 - connected = last poll < 60 s ago.
@@ -118,7 +140,7 @@ Every task carries `agent_status`, `agent_proposal` (object or null), `agent_dec
 `agent_decision` (object or null — the panel's own undo recipe `{kind, changes, recipe}`; the
 recipe holds the old values, i.e. the snapshot before the accept), `postpone_count` (from the
 Todoist label `(+n)`); the response has a global
-`agent: {connected, known, busy, name, last_seen, last_analysis, open_batches, queued, round_closed_at, duty, sessions, pending_deletes}`.
+`agent: {connected, known, busy, name, last_seen, last_analysis, open_batches, queued, round_closed_at, duty, sessions, last_write, pending_deletes}`.
 - `pending_deletes` = tasks the user marked „წაშალე" on the panel: they are **not** in `tasks`
   (hidden from every app view) and not yet deleted on Todoist; the real delete runs when the
   round closes. Do not propose for them; do not touch them.

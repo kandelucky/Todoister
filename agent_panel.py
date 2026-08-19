@@ -53,6 +53,10 @@ is free and the next poller takes it. Only the duty session receives `queue` row
 `agent_propose` stays open to every session. `POST /api/agent_take {agent, session}` = explicit
 takeover. A poll without `session` is session "" — one more session, nothing special (old
 pollers keep working). Two different agents: first come, one duty globally (v1).
+Access (Package B, 2026-08-18, apikeys.py): a call that came with an agent KEY carries
+params["_agent"] / body["_agent"] = the key's name, set by the server — that name wins over the
+self-declared `agent`. Every successful POST from an agent key is noted as the audit line
+(setting agent_last_write → state agent.last_write) so the panel can show „ბოლო ჩაწერა".
 """
 import datetime
 import json
@@ -159,6 +163,16 @@ def _seconds_since(iso):
         return None
 
 
+def _json_setting(conn, key):
+    raw = _setting(conn, key, "")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
 def _cutoff():
     """ISO timestamp SESSION_TTL seconds ago (same format as _now → string compare is safe)."""
     return (datetime.datetime.now() - datetime.timedelta(seconds=SESSION_TTL)).isoformat(timespec="milliseconds")
@@ -249,6 +263,7 @@ def agent_state(conn):
             "SELECT COUNT(*) c FROM agent_queue WHERE status!='done'"
         ).fetchone()["c"],
         "round_closed_at": _setting(conn, "agent_round_closed_at", ""),
+        "last_write": _json_setting(conn, "agent_last_write"),   # audit line: last POST from an agent key
         "duty": _duty(conn),                      # {agent, session, since} | None — who receives queue + trigger
         "sessions": len(_sessions_alive(conn)),   # live sessions (polled within SESSION_TTL), all agents
     }
@@ -328,6 +343,25 @@ def _task_brief(conn, tid):
     return {"text": r["content"] or "", "project": r["project"] or "", "section": r["section"] or ""}
 
 
+def _who(src, conn):
+    """Agent name: the key's name (server-set `_agent`) wins over the self-declared `agent`."""
+    return ((src.get("_agent") or src.get("agent") or _setting(conn, "agent_name", "")) or "").strip()
+
+
+def note_agent_write(conn, agent, path, body):
+    """Audit line (Package B): the last successful POST that came with an agent key."""
+    tid = (body or {}).get("id") or (body or {}).get("batch_id") or ""
+    text = ""
+    if (body or {}).get("id"):
+        try:
+            text = _task_brief(conn, body["id"]).get("text", "")
+        except Exception:
+            text = ""
+    _set(conn, "agent_last_write", json.dumps(
+        {"agent": agent, "at": _now(), "path": path.replace("/api/", ""), "id": tid, "text": text},
+        ensure_ascii=False))
+
+
 # ---------------------------------------------------------------- GET /api/agent_queue
 def get_queue(conn, params):
     """The agent's poll. Also the heartbeat: every call refreshes agent_last_seen.
@@ -336,7 +370,7 @@ def get_queue(conn, params):
     limit (log rows: default 500 with since, 100 without; max 2000).
     Returns queue rows, open batches, log, and a pending trigger (consumed once) — queue and
     trigger only for the DUTY session (see module doc); everyone gets the log + presence."""
-    agent = (params.get("agent") or "").strip()
+    agent = (params.get("_agent") or params.get("agent") or "").strip()   # key name wins
     session = (params.get("session") or "").strip()
     _set(conn, "agent_last_seen", _now())
     if agent:
@@ -433,7 +467,7 @@ def _propose(conn, body):
     items = body.get("proposals")
     if not isinstance(items, list):
         items = [{"id": body.get("id"), "proposal": body.get("proposal")}]
-    agent = (body.get("agent") or "").strip()
+    agent = (body.get("_agent") or body.get("agent") or "").strip()   # key name wins
     n, skipped = 0, []
     for it in items:
         tid = (it or {}).get("id")
@@ -550,7 +584,7 @@ def _enqueue(conn, body):
     """Panel → agent: {active:[…], triage:[…], agent?}. One batch; every task gets
     agent_status=queued. The agent picks it up on its next poll."""
     batch_id = uuid.uuid4().hex[:12]
-    agent = (body.get("agent") or _setting(conn, "agent_name", "")).strip()
+    agent = _who(body, conn)
     n = 0
     for tab in ("active", "triage"):
         for it in body.get(tab) or []:
@@ -577,7 +611,7 @@ def _done(conn, body):
     batch_id = (body.get("batch_id") or "").strip()
     if not batch_id:
         return False
-    agent = (body.get("agent") or _setting(conn, "agent_name", "")).strip()
+    agent = _who(body, conn)
     session = (body.get("session") or "").strip()
     duty = _duty(conn)
     if duty and not (duty["agent"] == agent and duty["session"] == session):
@@ -610,7 +644,7 @@ def _done(conn, body):
 def _take(conn, body):
     """Agent → server: {agent, session} — explicit takeover of the duty lease (e.g. Lasha told
     THIS session to be the secretary). Also counts as a poll for presence."""
-    agent = (body.get("agent") or _setting(conn, "agent_name", "")).strip()
+    agent = _who(body, conn)
     session = (body.get("session") or "").strip()
     if not agent:
         return False

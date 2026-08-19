@@ -950,6 +950,21 @@ def main():
     if not wait_ready():
         print("Server failed to start.", file=sys.stderr)
         sys.exit(1)
+    # access control (apikeys.py): a fresh key for this window; the first page load turns it into
+    # the app's cookie. First run (no DB yet) → kept in memory until onboarding creates the DB.
+    import apikeys
+    if os.path.exists(DB_PATH):
+        import sqlite3 as _sq
+        _c = _sq.connect(DB_PATH)
+        _c.row_factory = _sq.Row
+        try:
+            app_key = apikeys.new_app_key(_c)
+            _c.commit()
+        finally:
+            _c.close()
+    else:
+        app_key = apikeys.new_app_key(None)
+    entry_url = f"{URL}/?t={app_key}"
     threading.Thread(target=background_sync_loop, daemon=True).start()
 
     W, H = 1280, 860
@@ -963,7 +978,7 @@ def main():
 
     window = webview.create_window(
         WINDOW_TITLE,
-        URL,
+        entry_url,
         width=W,
         height=H,
         min_size=(900, 600),

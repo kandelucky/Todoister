@@ -45,3 +45,4 @@ _megi/
 *.swp
 .DS_Store
 Thumbs.db
+agent-keys/

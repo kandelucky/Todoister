@@ -591,8 +591,14 @@ function agentTriageCard(t){
   const done = !!ui.decided;
   const off = agentOffline();               // B3: comment / „?" locked while the agent is away
   const mainDone = p.complete === true;     // agent proposes completion → შესრულდა is the main button
-  return `<div class="kt ${done ? "done" : ""} ${ui.flag ? "flagged" : ""}" id="kt-${t.id}">
+  // same shape as tab 1: check circle + postpone button + the same More list + the escalation block
+  const pcls = ["P1","P2","P3"].includes(t.priority) ? t.priority.toLowerCase() : "";
+  const dn = done && ui.kind === "complete" ? " on" : "";
+  const e = ui.esc;
+  const escTxt = e ? (e.n >= 5 ? tr("agent.esc_count", {n: e.n}) : tr("agent.esc_age", {n: e.age})) : "";
+  return `<div class="kt ${done ? "done" : ""} ${ui.flag ? "flagged" : ""} ${e ? "esc-on" : ""}" id="kt-${t.id}">
     <span class="conf ${conf}" title="${esc(tr("agent.conf_" + conf))}"></span>
+    <button class="chk ${pcls}${dn}" title="${esc(tr("agent.complete"))}" onclick="agentComplete('${t.id}')">${AG_ICO.check}</button>
     <div class="body">
       <div class="ttl">${esc(t.text)}${hasFile ? AG_ICO.clip : ""}<span class="kp-type ${type}">${esc(tr("agent.type_" + type))}</span></div>
       ${p.read ? `<div class="read"><b>${esc(p.read)}</b></div>` : ""}
@@ -606,10 +612,19 @@ function agentTriageCard(t){
       ${descAdd ? `<div class="desc" title="${esc(tr("agent.desc_append"))}">${AG_ICO.desc}<span>${esc(descAdd)}</span></div>` : ""}
       ${subs}${q}
       <textarea class="cm ${cmOpen ? "show" : ""}" id="cm-${t.id}" rows="1" placeholder="${esc(tr("agent.comment_ph"))}" oninput="agentCm('${t.id}',this)" ${off ? "readonly" : ""}>${esc(cm)}</textarea>
+      ${e ? `<div class="esc show">${esc(escTxt)}
+        <div class="sub">
+          <button onclick="agentEscSplit('${t.id}')" ${off ? `disabled title="${esc(tr("agent.offline_locked"))}"` : ""}>${esc(tr("agent.esc_split"))}</button>
+          <button onclick="agentEscSomeday('${t.id}')">${esc(tr("agent.esc_someday"))}</button>
+          <button class="warn" onclick="agentEscDelete('${t.id}')">${esc(tr("agent.esc_delete"))}</button>
+          <button onclick="agentEscAnyway('${t.id}')">${esc(tr("agent.esc_anyway"))}</button>
+          <button class="x" onclick="agentEscClose('${t.id}')" title="${esc(tr("agent.undo"))}">${AG_ICO.undo}</button>
+        </div></div>` : ""}
     </div>
     <div class="acts">
       ${mainDone ? `<button class="act ok" onclick="agentComplete('${t.id}')">${esc(tr("agent.complete"))}</button>`
                  : `<button class="act ok" onclick="agentAccept('${t.id}')">${esc(tr("agent.accept"))}</button>`}
+      <button class="act" id="ag-pp-${t.id}" onclick="event.stopPropagation(); agentMenuWhen(this,'${t.id}')">${esc(tr("agent.postpone"))}${AG_ICO.caret}</button>
       <button class="act" onclick="event.stopPropagation(); agentMenuMore(this,'${t.id}')">${esc(tr("agent.more"))}${AG_ICO.caret}</button>
     </div>
     <div class="dec"><span>${esc(agentVerdict(ui))}</span><button class="undo" title="${esc(tr("agent.undo"))}" onclick="agentUndo('${t.id}')">${AG_ICO.undo}</button></div>
@@ -769,10 +784,11 @@ function agentMenuMore(btn, id){
   // whichever of ვეთანხმები / შესრულდა is not the main button lives here
   agentMenu(btn, [
     mainDone ? { label: tr("agent.accept"), ico: "check", fn: () => agentAccept(id) } : null,
-    { label: tr("agent.more_edit"),   ico: "edit",  fn: () => agentHintEdit(id) },
-    mainDone ? null : { label: tr("agent.complete"), ico: "done", fn: () => agentComplete(id) },
-    { label: tr("agent.more_split"),  ico: "split", fn: () => agentSplit(id), disabled: agentOffline(), title: tr("agent.offline_locked") },
-    { label: tr("agent.more_delete"), ico: "trash", fn: () => agentDelete(id) },
+    { label: tr("agent.more_edit"),    ico: "edit",  fn: () => agentHintEdit(id) },
+    { label: tr("agent.more_partial"), ico: "part",  fn: () => agentPartial(id) },
+    { label: tr("agent.more_split"),   ico: "split", fn: () => agentSplit(id), disabled: agentOffline(), title: tr("agent.offline_locked") },
+    { label: tr("agent.more_delete"),  ico: "trash", fn: () => agentDelete(id) },
+    { label: tr("agent.more_keep"),    ico: "keep",  fn: () => agentKeep(id) },
   ].filter(Boolean));
 }
 function agentHintEdit(id){
@@ -858,7 +874,7 @@ async function agentPostpone(id, when, date, force, extra){
   const n = (t.postpone_count || 0) + 1, age = agentOverdueDays(t);
   const newDate = when === "date" ? (date || "") : agentWhenDate(when);
   if(!force && newDate && (n >= 5 || age >= 30)){       // intervention first — the answer buttons decide
-    const u = agentUiFor(id, "active"); u.esc = { when, date: newDate, extra: extra || null, n, age };
+    const u = agentUiFor(id, agentBase(id).tab); u.esc = { when, date: newDate, extra: extra || null, n, age };
     render(); return;
   }
   const fields = [];
@@ -986,9 +1002,10 @@ function agentActiveCard(t){
   const cm = ui.comment || "", cmOpen = ui.cmOpen || !!cm.trim();
   const pcls = ["P1","P2","P3"].includes(t.priority) ? t.priority.toLowerCase() : "";
   const e = ui.esc;
+  const dn = done && ui.kind === "complete" ? " on" : "";     // decided completion -> circle stays filled
   const escTxt = e ? (e.n >= 5 ? tr("agent.esc_count", {n: e.n}) : tr("agent.esc_age", {n: e.age})) : "";
   return `<div class="kt ${done ? "done" : ""} ${ui.flag ? "flagged" : ""} ${t.sticky ? "pinned" : ""} ${e ? "esc-on" : ""}" id="kt-${t.id}">
-    <button class="chk ${pcls}" title="${esc(tr("agent.complete"))}" onclick="agentComplete('${t.id}')">${AG_ICO.check}</button>
+    <button class="chk ${pcls}${dn}" title="${esc(tr("agent.complete"))}" onclick="agentComplete('${t.id}')">${AG_ICO.check}</button>
     <div class="body">
       <div class="ttl">${esc(t.text)}${hasFile ? AG_ICO.clip : ""}</div>
       <div class="tags">

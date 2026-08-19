@@ -1811,6 +1811,10 @@
   .kt .chk{width:18px; height:18px; flex-shrink:0; margin-top:2px; border:1.5px solid var(--p4); border-radius:50%; background:transparent; display:inline-flex; align-items:center; justify-content:center; color:transparent;}
   .kt .chk.p1{border-color:var(--p1); background:rgba(220,76,62,.10);} .kt .chk.p2{border-color:var(--p2); background:rgba(235,137,9,.10);} .kt .chk.p3{border-color:var(--p3); background:rgba(42,103,226,.10);}
   .kt .chk:hover{color:var(--text-2);} .kt .chk svg{width:11px; height:11px; stroke-width:3;}
+  /* decided completion -> the circle stays filled (same look as a completed task in the ordinary list) */
+  .kt .chk.on{background:var(--p4); border-color:var(--p4); color:#fff;}
+  .kt .chk.on.p1{background:var(--p1); border-color:var(--p1);} .kt .chk.on.p2{background:var(--p2); border-color:var(--p2);} .kt .chk.on.p3{background:var(--p3); border-color:var(--p3);}
+  .kt .chk.on:hover{color:#fff;}
   .kt .conf{width:8px; height:8px; flex-shrink:0; border-radius:50%; display:inline-block; background:var(--today); margin-top:6px;} .kt .conf.mid{background:var(--p2);} .kt .conf.low{background:var(--p1);}
   .kt .body{flex:1; min-width:0;}
   .kt .ttl{font-size:14px; line-height:1.4; color:var(--text); display:flex; align-items:center; gap:6px; flex-wrap:wrap;}

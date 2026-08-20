@@ -1,0 +1,16 @@
+# Todoister — Python dependencies (Windows, Python 3.14)
+#
+# Create the environment:
+#   py -3.14 -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt
+#
+# start.bat / start.vbs launch the app from .venv — see start.bat.example.
+
+# Runtime — pywebview plus the .NET / WebView2 backend the native window needs.
+pywebview==6.2.1
+pythonnet==3.1.0
+
+# Dev only — test suite (tests/) and the installer build (Todoister.spec).
+pytest==9.1.1
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6

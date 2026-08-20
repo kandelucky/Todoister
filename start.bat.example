@@ -2,8 +2,11 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 title Todoister — Tasks
-REM Edit this line if you use a venv; e.g. ".venv\Scripts\python.exe app.py"
-python app.py
+REM Copy this file to start.bat, then create the environment once:
+REM   py -3.14 -m venv .venv
+REM   .venv\Scripts\python.exe -m pip install -r requirements.txt
+REM Save the copy as UTF-8 with BOM and CRLF line endings — LF breaks it.
+"%~dp0.venv\Scripts\python.exe" app.py
 echo.
 echo Server stopped. Press any key to close.
 pause >nul

@@ -9,6 +9,9 @@
 __pycache__/
 *.pyc
 
+# Local virtualenv (per-machine; recreate with requirements.txt)
+.venv/
+
 # PyInstaller / Inno Setup build output (generated, rebuilt each build)
 build/
 dist/

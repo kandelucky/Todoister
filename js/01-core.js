@@ -111,7 +111,7 @@ let draggedSectionName = null;
 let viewMode = (function(){ try{ return localStorage.getItem("viewMode") || "board"; } catch(e){ return "board"; } })();
 let calYear, calMonth;
 
-const esc = s => (s||"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const esc = s => (s ? String(s) : "").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // i18n aliases (t is already the task variable — so tr)
 const tr = (k, v) => (window.I18N ? window.I18N.t(k, v) : k);
 const trList = k => (window.I18N ? window.I18N.list(k) : [k]);
@@ -225,11 +225,25 @@ function applySyncState(d){
 }
 
 /* ============ API ============ */
+// Two failures, two messages: the connection (fetch + parse) and everything after it (state +
+// render). A draw bug used to be reported as „the app is offline", which hid the real cause
+// (2026-08-20) — past the first block the app is reachable, so a failure there is ours to fix.
+let _renderErr = "";     // last draw error already shown — the 10s poll must not repeat it
 async function fetchState(){
+  let d;
   try {
     const r = await fetch("/api/state");
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d = await r.json();
+    d = await r.json();
+  } catch(e){
+    if(!isOffline){
+      isOffline = true;
+      showToast(tr("toast.app_disconnected", {msg: e.message}), "error");
+    }
+    try { render(); } catch(_){}      // draw the offline state — a failure here must not mask the message
+    return;
+  }
+  try {
     state = d.tasks || []; projects = d.projects || []; projectSections = d.project_sections || {};
     projectMeta = d.project_meta || {};
     archivedProjects = d.archived_projects || [];
@@ -243,15 +257,16 @@ async function fetchState(){
     applySyncState(d);
     if(isOffline){ isOffline = false; }
     render();
+    _renderErr = "";
     maybeNotebookFavCheck();
     maybeMigrateNotebookPages();
     maybeNotebookDeletedCheck();
   } catch(e){
-    if(!isOffline){
-      isOffline = true;
-      showToast(tr("toast.app_disconnected", {msg: e.message}), "error");
+    console.error("render failed", e);
+    if(_renderErr !== e.message){     // same fault every 10 s → tell it once
+      _renderErr = e.message;
+      showToast(tr("toast.render_failed", {msg: e.message}), "error");
     }
-    render();
   }
 }
 

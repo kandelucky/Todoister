@@ -79,7 +79,7 @@ the response lists it in `skipped: [{id, reason: "not_inbox"}]` (other reasons: 
 `deleted_pending` = the user marked it for deletion, wait for the round to close; `completed` =
 the task is already done, nothing to triage). Overdue /
 today / other-project work belongs to tab „აქტიური" (stage 3), not here.
-Response: `{ok, proposed: n, skipped: […]}`.
+Response: `{ok, proposed: n, skipped: […], fixed: […]}`.
 Proposal schema:
 ```json
 { "read": "one sentence: how you read the capture (no name prefix)",
@@ -100,6 +100,11 @@ Proposal schema:
   "questions": ["only when confidence is low"],
   "made_at": "ISO (filled by the server when missing)" }
 ```
+**Types are enforced** (2026-08-20): a field whose value does not match the type above is
+dropped before it is stored — the rest of the proposal is kept, so the card still reaches the
+user. The response names what was dropped: `fixed: [{id, dropped: ["read"]}]` (a list field
+that lost non-text items is named as `labels[]`). Read it — a dropped field means your
+proposal lost information. `read` is a sentence of text, not `true`.
 
 ## 2. Read what the user sent — `GET /api/agent_queue`
 Query: `agent=<name>` · `session=<id>` (see Duty session) · `status=queued|waiting|done|all` (default = not done) · `since=<ISO>`

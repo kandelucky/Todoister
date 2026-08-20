@@ -202,6 +202,7 @@
   "toast.reconnected": "Todoist-თან კავშირი აღდგა — ცვლილებები გადაგზავნილია",
   "toast.dead_discarded": "{n} უარყოფილი ცვლილება მოშორდა რიგიდან",
   "toast.app_disconnected": "აპთან კავშირი დაიკარგა ({msg}). მონაცემები არ განახლდება.",
+  "toast.render_failed": "გვერდის დახატვა ვერ მოხერხდა ({msg}). კავშირი გამართულია.",
   "toast.save_failed": "ცვლილება ვერ შენახულია: {msg}",
   "toast.syncing": "სინქრონიზაცია…",
   "toast.push_failed": "გაგზავნა ვერ მოხერხდა: {msg}",

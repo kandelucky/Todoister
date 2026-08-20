@@ -202,6 +202,7 @@
   "toast.reconnected": "Reconnected to Todoist — changes sent",
   "toast.dead_discarded": "{n} rejected change(s) removed from the queue",
   "toast.app_disconnected": "Lost connection to the app ({msg}). Data will not refresh.",
+  "toast.render_failed": "Could not draw the page ({msg}). The connection is fine.",
   "toast.save_failed": "Change not saved: {msg}",
   "toast.syncing": "Syncing…",
   "toast.push_failed": "Push failed: {msg}",

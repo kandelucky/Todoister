@@ -462,13 +462,43 @@ def handle_post(conn, path, body):
     return False
 
 
+# Proposal field types (AGENT-API.md „Proposal schema"). An agent that sends the wrong type
+# (2026-08-20: "read": true) used to reach the panel and break its render — the field is dropped
+# here instead, and the agent is told in the response (`fixed`) so it can correct itself.
+PROP_TEXT = ("read", "type", "title", "project", "section", "priority", "due", "time",
+             "due_string", "description_append", "merge_into", "confidence", "made_at")
+PROP_LIST = ("labels", "subtasks", "questions")
+
+
+def _clean_proposal(prop):
+    """Drop every field whose type does not match the schema. Returns (clean, dropped names)."""
+    clean, dropped = {}, []
+    for k, v in prop.items():
+        if k in PROP_TEXT and not isinstance(v, str):
+            dropped.append(k)
+        elif k in PROP_LIST:
+            if not isinstance(v, list):
+                dropped.append(k)
+                continue
+            items = [x for x in v if isinstance(x, str)]
+            if len(items) != len(v):
+                dropped.append(k + "[]")      # the list survives, its non-text items do not
+            if items:
+                clean[k] = items
+        elif k == "complete" and v is not True:
+            dropped.append(k)
+        else:
+            clean[k] = v
+    return clean, dropped
+
+
 def _propose(conn, body):
     """Agent → task: {id, proposal} or {proposals:[{id, proposal}, …]}. Sets agent_status=proposed."""
     items = body.get("proposals")
     if not isinstance(items, list):
         items = [{"id": body.get("id"), "proposal": body.get("proposal")}]
     agent = (body.get("_agent") or body.get("agent") or "").strip()   # key name wins
-    n, skipped = 0, []
+    n, skipped, fixed = 0, [], []
     for it in items:
         tid = (it or {}).get("id")
         prop = (it or {}).get("proposal")
@@ -494,6 +524,10 @@ def _propose(conn, body):
         if (row["agent_status"] or "") == "deleted_pending":
             skipped.append({"id": tid, "reason": "deleted_pending"})
             continue
+        prop, dropped = _clean_proposal(prop)
+        if dropped:
+            fixed.append({"id": tid, "dropped": dropped})
+            _log(f"proposal {tid} — dropped bad field(s): {', '.join(dropped)}")
         prop.setdefault("made_at", _now())
         _upsert_local(conn, tid, agent_proposal=json.dumps(prop, ensure_ascii=False),
                       agent_status="proposed", agent_decided_at=None, agent_decision=None)
@@ -503,8 +537,9 @@ def _propose(conn, body):
         _set(conn, "agent_last_seen", _now())
         if agent:
             _set(conn, "agent_name", agent)
-    _log(f"{n} proposal(s) written" + (f", {len(skipped)} skipped" if skipped else ""))
-    return {"proposed": n, "skipped": skipped}
+    _log(f"{n} proposal(s) written" + (f", {len(skipped)} skipped" if skipped else "")
+         + (f", {len(fixed)} cleaned" if fixed else ""))
+    return {"proposed": n, "skipped": skipped, "fixed": fixed}
 
 
 def _status(conn, body):

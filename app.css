@@ -64,6 +64,68 @@
   .sidebar-help .ico{width:24px; color:var(--text-2); flex-shrink:0;}
   .sidebar-help .hlabel{flex:1;}
 
+  /* ---- Buddy micro strip (bottom of the sidebar) ----
+     Visual only for now: fixed placeholder values, no engine, not clickable.
+     Geometry matches the approved playground strip: 77px tall, 63px scene,
+     three 34px rings; colour dialled right down (grayscale 0.85). */
+  .buddy-strip{
+    /* sits at the bottom, just above Help & resources, set apart by its own card */
+    flex-shrink:0; margin-top:auto; margin-bottom:10px;
+    /* base size = 2 border + 12 padding + 63 scene + 8 gap + 114 rings = 199.
+       --buddy-zoom (js/02-ui-controls.js) scales the whole card with the sidebar,
+       so it stays flush edge to edge instead of growing an empty right half. */
+    align-self:flex-start; width:199px; zoom:var(--buddy-zoom, 1);
+    display:flex; align-items:center; gap:8px;
+    height:77px; padding:6px;
+    background:var(--card); border:1px solid var(--border); border-radius:var(--r);
+  }
+  .buddy-scene{
+    position:relative; flex-shrink:0; width:63px; height:63px;
+    background-image:url('/assets/buddy-dragon.png');
+    background-size:800% 1400%;
+    background-position:28.571% 92.308%;      /* mini cave background: row 12, col 2 */
+    background-repeat:no-repeat; image-rendering:pixelated;
+    border:1px solid var(--border); border-radius:var(--r); overflow:hidden;
+  }
+  .buddy-dragon{
+    position:absolute; inset:0;
+    background-image:url('/assets/buddy-dragon.png');
+    background-size:800% 1400%;
+    background-position:28.571% 46.154%;      /* stage 8, idle_happy */
+    background-repeat:no-repeat; image-rendering:pixelated;
+    transform:scale(0.85); transform-origin:50% 100%;
+  }
+  .buddy-right{flex:1; min-width:0;}
+  .buddy-top{display:flex; align-items:baseline; justify-content:space-between; gap:6px;}
+  .buddy-name{
+    font-size:14px; font-weight:700; color:var(--text); line-height:1.2;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .buddy-lv{
+    flex-shrink:0; font-family:Consolas,monospace; font-size:10px; font-weight:600;
+    color:var(--text-2); text-transform:uppercase; letter-spacing:.5px;
+  }
+  .buddy-lv b{font-size:13px; color:#9c7b4d; font-weight:800;}
+  .buddy-rings{
+    display:flex; gap:6px; margin-top:5px;
+    filter:grayscale(0.85) brightness(0.75);
+  }
+  .buddy-ring{
+    position:relative; width:34px; height:34px; border-radius:50%;
+    background:conic-gradient(var(--today) calc(var(--p,100) * 1%), var(--hover) 0);
+  }
+  .buddy-ring.mid{background:conic-gradient(var(--p2) calc(var(--p,100) * 1%), var(--hover) 0);}
+  .buddy-ring.bad{background:conic-gradient(var(--accent) calc(var(--p,100) * 1%), var(--hover) 0);}
+  .buddy-ring i{
+    position:absolute; inset:3px; border-radius:50%; background:var(--card);
+    display:flex; align-items:center; justify-content:center; color:var(--text);
+  }
+  .buddy-ring svg{width:15px; height:15px;}
+  .buddy-strip + .sidebar-help{margin-top:0;}   /* the strip takes the free space now */
+  #app-sidebar-container.disconnected .buddy-strip{
+    opacity:0.38; pointer-events:none; filter:grayscale(1);
+  }
+
   /* ---- Disconnected state ---- */
   #app-sidebar-container.disconnected .sidebar-add-task,
   #app-sidebar-container.disconnected #top-sidebar-nav-items,

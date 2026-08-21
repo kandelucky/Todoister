@@ -690,5 +690,8 @@
   "agent.esc_someday": "როდესმეში",
   "agent.esc_delete": "წაშალე",
   "agent.esc_anyway": "მაინც გადადე",
-  "agent.verdict_postponed": "გადაიდო: {when} · @(+{n})"
+  "agent.verdict_postponed": "გადაიდო: {when} · @(+{n})",
+
+  "buddy.lvl": "დონე",
+  "buddy.name_placeholder": "ვასიკო"
 }

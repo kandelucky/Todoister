@@ -186,7 +186,11 @@ function renderSidebar(){
   document.getElementById("count-completed").textContent = "";
   if(typeof agentRenderNav === "function") agentRenderNav();   // AI agent panel badge / disabled / locked (js/14-agent.js)
   const userProjects = projects.filter(p => p !== INBOX_NAME);  // Inbox is its own top nav item, not a "My Project"
-  document.getElementById("projects-used").textContent = tr("sidebar.used", {n: userProjects.length, total: PROJECT_LIMIT});
+  const usedEl = document.getElementById("projects-used");
+  // two forms of the same counter; fitProjectsHeader() picks whichever the row can hold
+  usedEl.dataset.full  = tr("sidebar.used", {n: userProjects.length, total: PROJECT_LIMIT});
+  usedEl.dataset.short = userProjects.length + "/" + PROJECT_LIMIT;
+  fitProjectsHeader();
 
   const list = document.getElementById("projects_list");
   list.className = projectsCollapsed ? "collapsed" : "";

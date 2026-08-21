@@ -8,6 +8,7 @@
     --cal:#637760; --cal-hi:#7e9a7a;
     --gcal:#4a6b94; --gcal-hi:#5f85b3;
     --r:5px;
+    --sidebar-w:215px;        /* drag the sidebar edge to change it (js/02-ui-controls.js) */
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   html,body{height:100%; overflow:hidden;}
@@ -36,10 +37,24 @@
 
   /* ============ SIDEBAR ============ */
   #app-sidebar-container{
-    width:280px; background:var(--sidebar-bg); overflow-y:auto;
+    width:var(--sidebar-w); background:var(--sidebar-bg); overflow-y:auto;
     padding:8px 8px 24px; flex-shrink:0; border-right:1px solid var(--border);
     display:flex; flex-direction:column;
   }
+  /* drag handle sitting on the sidebar's right edge; out of flow, so it
+     never takes layout space. Double-click resets to the default width. */
+  #sidebar-resizer{
+    position:absolute; top:0; bottom:0; left:var(--sidebar-w);
+    width:7px; margin-left:-3px; z-index:80; cursor:col-resize;
+  }
+  #sidebar-resizer::after{
+    content:""; position:absolute; top:0; bottom:0; left:3px; width:1px;
+    background:transparent; transition:background .12s;
+  }
+  #sidebar-resizer:hover::after,
+  body.resizing-sidebar #sidebar-resizer::after{background:var(--accent);}
+  body.resizing-sidebar{cursor:col-resize; user-select:none;}
+
   .sidebar-help{
     margin-top:auto; display:flex; align-items:center; gap:10px;
     padding:8px 10px; color:var(--text-2); font-size:14px; border-radius:var(--r);
@@ -165,13 +180,18 @@
   #activity_log .ico{color:var(--text-2);}
 
   .sidebar-projects-header{
-    display:flex; align-items:center; padding:16px 10px 4px;
+    display:flex; align-items:center; padding:16px 4px 4px 10px;
     color:var(--text-2); font-weight:600;
   }
-  .sidebar-projects-header .title{flex:1; cursor:pointer; border-radius:var(--r); padding:2px 4px; margin-left:-4px;}
+  .sidebar-projects-header .title{
+    flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    cursor:pointer; border-radius:var(--r); padding:2px 4px; margin-left:-4px;
+  }
   .sidebar-projects-header .title:hover{color:var(--text);}
-  .sidebar-projects-header .used{font-size:11px; color:var(--text-3); margin-right:6px; font-weight:normal;}
-  .sidebar-projects-header button{padding:2px 8px; color:var(--text-2); border-radius:var(--r);}
+  .sidebar-projects-header .used{font-size:11px; color:var(--text-3); margin-right:4px; font-weight:normal; flex-shrink:0; white-space:nowrap;}
+  /* narrow sidebar: the row stops fitting, so the quota counter steps aside */
+  #app-sidebar-container.narrow .sidebar-projects-header .used{display:none;}
+  .sidebar-projects-header button{padding:2px 5px; color:var(--text-2); border-radius:var(--r);}
   .sidebar-projects-header button:hover{background:var(--hover);}
   .sidebar-projects-header .proj-add-btn{display:inline-flex; align-items:center; justify-content:center; padding:3px;}
   .sidebar-projects-header .proj-add-btn svg{width:18px; height:18px;}

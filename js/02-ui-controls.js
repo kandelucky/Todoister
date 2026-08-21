@@ -299,3 +299,65 @@ function focusSearch(){
   if(input){ input.focus(); input.select(); }
 }
 
+
+/* ============ SIDEBAR RESIZE ============ */
+// The width lives in the --sidebar-w custom property and is remembered in
+// localStorage. MIN keeps the Buddy strip (199px) flush with the panel edges.
+const SIDEBAR_MIN = 215, SIDEBAR_MAX = 420;
+
+// The projects header gives up its quota counter as late as possible. Measured,
+// not guessed: the row is full exactly when the "My Projects" label starts to
+// truncate. Three steps, widest first: "Used: 4/5" -> "4/5" -> nothing.
+function fitProjectsHeader(){
+  const sb = document.getElementById("app-sidebar-container");
+  const title = document.querySelector(".sidebar-projects-header .title");
+  const used = document.getElementById("projects-used");
+  if(!sb || !title) return;
+  const fits = () => title.scrollWidth <= title.clientWidth + 1;
+  sb.classList.remove("narrow");
+  if(used) used.textContent = used.dataset.full || "";
+  if(fits()) return;
+  if(used && used.dataset.short){
+    used.textContent = used.dataset.short;
+    if(fits()) return;
+  }
+  sb.classList.add("narrow");                          // no room left at all
+}
+
+function setSidebarWidth(w, persist){
+  w = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.round(w)));
+  document.documentElement.style.setProperty("--sidebar-w", w + "px");
+  fitProjectsHeader();
+  // the Buddy card grows with the panel: 199px base, sidebar minus its 8+8 padding
+  document.documentElement.style.setProperty("--buddy-zoom", ((w - 16) / 199).toFixed(4));
+  if(persist){ try{ localStorage.setItem("sidebarWidth", w); }catch(e){} }
+  return w;
+}
+
+function initSidebarResize(){
+  let saved = 0;
+  try{ saved = parseInt(localStorage.getItem("sidebarWidth"), 10) || 0; }catch(e){}
+  setSidebarWidth(saved || SIDEBAR_MIN, false);
+  window.addEventListener("load", fitProjectsHeader);   // re-measure once fonts are in
+
+  const handle = document.getElementById("sidebar-resizer");
+  if(!handle) return;
+  handle.addEventListener("mousedown", e => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = document.getElementById("app-sidebar-container").offsetWidth;
+    let w = startW;
+    document.body.classList.add("resizing-sidebar");
+    const onMove = ev => { w = setSidebarWidth(startW + ev.clientX - startX, false); };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("resizing-sidebar");
+      setSidebarWidth(w, true);            // save once, at the end of the drag
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+  handle.addEventListener("dblclick", () => setSidebarWidth(SIDEBAR_MIN, true));
+}
+initSidebarResize();

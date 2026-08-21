@@ -51,6 +51,7 @@
   "cal.sync_off_body": "Tasks will stop syncing to Google Calendar. The view-only connection is not affected.",
   "sidebar.my_projects": "My Projects",
   "sidebar.used": "Used: {n}/{total}",
+  "sidebar.resize": "Drag to resize (double-click resets)",
   "fl.filters": "Filters",
   "fl.labels": "Labels",
   "fl.my_filters": "My Filters",

@@ -128,7 +128,7 @@ GUIDE_CSS = """
 """
 
 
-GUIDE_TOPICS = ("program", "sync", "notes", "buddy", "calendar", "calendar-simple", "calendar-full")
+GUIDE_TOPICS = ("program", "sync", "agent", "notes", "buddy", "calendar", "calendar-simple", "calendar-full")
 
 def build_guide_page(topic="program", lang="en"):
     """Render one help topic (guide/<topic>.<lang>.md) as a styled HTML page."""

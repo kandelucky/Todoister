@@ -120,6 +120,7 @@ function openHelpMenu(ev){
 const HELP_TOPICS = [
   {key:"help.t_program",  icon:"book",     topic:"program"},
   {key:"help.t_sync",     icon:"refresh",  topic:"sync"},
+  {key:"help.t_agent",    icon:"sparkles", topic:"agent"},
   {key:"help.t_notes",    icon:"message",  topic:"notes"},
   {key:"help.t_buddy",    icon:"paw",      topic:"buddy"},
   {sep:true},

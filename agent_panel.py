@@ -65,6 +65,7 @@ import uuid
 
 CONNECT_TTL = 60          # seconds since the last agent poll → still "connected"
 SESSION_TTL = CONNECT_TTL # seconds of silence after which a session (and its duty lease) is gone
+LABEL_MAX   = 80          # a session label longer than this is cut (the panel draws it)
 LABEL_POSTPONE_RE = re.compile(r"^\(\+(\d+)\)$")   # Todoist label "(+3)" → postpone_count 3
 STATUSES = ("", "proposed", "accepted", "changed", "rejected", "split", "queued", "done", "deleted_pending", "completed",
             "postponed", "partial", "kept")                                   # the last three = tab 1 (აქტიური) decisions
@@ -128,9 +129,14 @@ def ensure_agent_schema(conn):
             session    TEXT NOT NULL DEFAULT '',   -- id the poller made up at start ('' = old poller without one)
             first_seen TEXT,
             last_seen  TEXT,
+            label      TEXT DEFAULT '',              -- the poller's own short line (persona / folder / id)
             PRIMARY KEY (agent, session)
         )
     """)
+    try:                                             # DBs made before the picker: add the column
+        conn.execute("ALTER TABLE agent_session ADD COLUMN label TEXT DEFAULT ''")
+    except Exception:
+        pass
     # First start with rounds: decisions made before this moment belong to no open round
     # (otherwise every card ever accepted would come back dimmed on tab 2).
     if not _setting(conn, "agent_round_closed_at", ""):
@@ -178,22 +184,52 @@ def _cutoff():
     return (datetime.datetime.now() - datetime.timedelta(seconds=SESSION_TTL)).isoformat(timespec="milliseconds")
 
 
-def _touch_session(conn, agent, session):
-    """Presence per (agent, session): upsert last_seen, forget sessions silent for SESSION_TTL."""
+def _clean_label(label):
+    """The label is written by the agent and drawn in the panel: one line, bounded length."""
+    return " ".join(str(label or "").split())[:LABEL_MAX]
+
+
+def _touch_session(conn, agent, session, label=""):
+    """Presence per (agent, session): upsert last_seen, forget sessions silent for SESSION_TTL.
+    `label` (optional) is the poller's own short line — Lasha reads it to tell his windows apart.
+    A poll without one keeps the label sent earlier; an empty label never blanks a set one."""
     ts = _now()
+    label = _clean_label(label)
     conn.execute(
-        "INSERT INTO agent_session(agent, session, first_seen, last_seen) VALUES(?,?,?,?) "
-        "ON CONFLICT(agent, session) DO UPDATE SET last_seen=excluded.last_seen",
-        (agent, session, ts, ts),
+        "INSERT INTO agent_session(agent, session, first_seen, last_seen, label) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(agent, session) DO UPDATE SET last_seen=excluded.last_seen, "
+        "label=CASE WHEN excluded.label!='' THEN excluded.label ELSE agent_session.label END",
+        (agent, session, ts, ts, label),
     )
     conn.execute("DELETE FROM agent_session WHERE last_seen<?", (_cutoff(),))
 
 
 def _sessions_alive(conn):
     return [dict(r) for r in conn.execute(
-        "SELECT agent, session, first_seen, last_seen FROM agent_session WHERE last_seen>=? ORDER BY first_seen",
+        "SELECT agent, session, first_seen, last_seen, label FROM agent_session WHERE last_seen>=? "
+        "ORDER BY first_seen",
         (_cutoff(),),
     ).fetchall()]
+
+
+def _sessions_live(conn, duty=None):
+    """Every live session the way the panel needs it: who - its own label - since when - last poll -
+    does it hold the duty lease. Duty first, then oldest first (the panel lists them in this order)."""
+    if duty is None:
+        duty = _duty(conn)
+    out = []
+    for r in _sessions_alive(conn):
+        agent, session = r.get("agent") or "", r.get("session") or ""
+        out.append({
+            "agent": agent,
+            "session": session,
+            "label": r.get("label") or "",
+            "since": r.get("first_seen") or "",
+            "last_poll": r.get("last_seen") or "",
+            "on_duty": bool(duty and duty["agent"] == agent and duty["session"] == session),
+        })
+    out.sort(key=lambda x: (not x["on_duty"], x["since"]))
+    return out
 
 
 def _duty(conn):
@@ -251,6 +287,8 @@ def agent_state(conn):
         "SELECT DISTINCT batch_id FROM agent_queue WHERE status!='done' ORDER BY id"
     ).fetchall()]
     name = _setting(conn, "agent_name", "")
+    duty = _duty(conn)
+    live = _sessions_live(conn, duty)
     return {
         "connected": connected,
         "known": bool(name),                      # an agent has connected at least once → panel usable offline
@@ -264,8 +302,9 @@ def agent_state(conn):
         ).fetchone()["c"],
         "round_closed_at": _setting(conn, "agent_round_closed_at", ""),
         "last_write": _json_setting(conn, "agent_last_write"),   # audit line: last POST from an agent key
-        "duty": _duty(conn),                      # {agent, session, since} | None — who receives queue + trigger
-        "sessions": len(_sessions_alive(conn)),   # live sessions (polled within SESSION_TTL), all agents
+        "duty": duty,                             # {agent, session, since} | None — who receives queue + trigger
+        "sessions": len(live),                    # live sessions (polled within SESSION_TTL), all agents
+        "sessions_live": live,                    # the same sessions one by one — the panel's picker
     }
 
 
@@ -365,18 +404,20 @@ def note_agent_write(conn, agent, path, body):
 # ---------------------------------------------------------------- GET /api/agent_queue
 def get_queue(conn, params):
     """The agent's poll. Also the heartbeat: every call refreshes agent_last_seen.
-    params: agent (name), session (id the poller made up at start; optional), status
+    params: agent (name), session (id the poller made up at start; optional), label (optional
+    short line for the panel's session picker: persona / folder / id), status
     (queued|waiting|all; default = not done), since (ISO — log entries after this moment),
     limit (log rows: default 500 with since, 100 without; max 2000).
     Returns queue rows, open batches, log, and a pending trigger (consumed once) — queue and
     trigger only for the DUTY session (see module doc); everyone gets the log + presence."""
     agent = (params.get("_agent") or params.get("agent") or "").strip()   # key name wins
     session = (params.get("session") or "").strip()
+    label = (params.get("label") or "").strip()   # optional: what the panel shows for this session
     _set(conn, "agent_last_seen", _now())
     if agent:
         _set(conn, "agent_name", agent)
     who = agent or _setting(conn, "agent_name", "")
-    _touch_session(conn, who, session)
+    _touch_session(conn, who, session, label)
     duty, on_duty = _claim_duty(conn, who, session)
     status = (params.get("status") or "").strip()
     if not on_duty:
@@ -432,6 +473,7 @@ def get_queue(conn, params):
         "on_duty": on_duty,
         "duty": duty,
         "sessions": st["sessions"],
+        "sessions_live": st["sessions_live"],
         "queue": queue,
         "open_batches": st["open_batches"],
         "log": log,
@@ -677,14 +719,17 @@ def _done(conn, body):
 
 
 def _take(conn, body):
-    """Agent → server: {agent, session} — explicit takeover of the duty lease (e.g. Lasha told
-    THIS session to be the secretary). Also counts as a poll for presence."""
+    """Agent → server: {agent, session, label?} — explicit takeover of the duty lease (e.g. Lasha
+    told THIS session to be the secretary). The panel's session picker calls it as well, with the
+    session Lasha picked from the list. Also counts as a poll for presence."""
     agent = _who(body, conn)
     session = (body.get("session") or "").strip()
+    label = (body.get("label") or "").strip()
     if not agent:
         return False
     _set(conn, "agent_last_seen", _now())
     _set(conn, "agent_name", agent)
-    _touch_session(conn, agent, session)
+    _touch_session(conn, agent, session, label)
     duty, _ = _claim_duty(conn, agent, session, force=True)
-    return {"duty": duty, "on_duty": True, "sessions": len(_sessions_alive(conn))}
+    live = _sessions_live(conn, duty)
+    return {"duty": duty, "on_duty": True, "sessions": len(live), "sessions_live": live}

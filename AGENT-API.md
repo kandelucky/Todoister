@@ -52,17 +52,25 @@ Lasha often has 2–3 sessions of the same agent open; each may run the poller. 
 who works — not your code:
 - Make up a session id at start and send it on every poll: `GET /api/agent_queue?agent=kiki&session=<uuid>`.
   Presence is kept per (agent, session); a session silent for 60 s is forgotten.
+- **Send a `label=` too** (optional, one line, max 80 chars, e.g. `label=კიკი · triage · a1b2c3d4`).
+  It is what Lasha reads in the panel to tell your windows apart — an id alone tells him nothing.
+  A poll without `label` keeps the one you sent before; it is only forgotten with the session itself.
 - **The first live session is on duty**; every poll renews its lease; when it stays silent for 60 s the
   lease is free and the next poller takes it. Explicit takeover (Lasha told THIS session to be the
-  secretary): `POST /api/agent_take {agent, session}` → `{ok, duty, on_duty:true, sessions}`.
+  secretary): `POST /api/agent_take {agent, session, label?}` → `{ok, duty, on_duty:true, sessions, sessions_live}`.
+- **Lasha can hand the duty over from the panel** (2026-08-21, Kiki's letter №3): the connection line
+  in the panel header opens the list of live sessions (label · since · last poll) and each row has
+  „მორიგედ დააყენე" → the same `POST /api/agent_take`. So the duty may move while you are polling:
+  read `on_duty` on **every** poll, never remember it.
 - **Only the duty session** gets `queue` rows and the `trigger_at`; every other session gets
   `queue: []` and `trigger_at: ""` (the log, `open_batches` and presence are for everyone).
   `POST /api/agent_done` from a session that is **not** on duty while another live session holds it →
   `{ok:false, error:"not_on_duty", duty:{agent, session, since}}` and nothing changes; if nobody alive holds
   the duty, the finisher takes it. `agent_propose` stays open to every session (harmless).
 - Every poll answers `session`, `on_duty: true|false`, `duty: {agent, session, since} | null`, `sessions: n`
-  (live sessions, all agents); `/api/state` → `agent.duty` + `agent.sessions`. The panel header shows
-  „kiki — მორიგე სესია (2 ხაზზე)" when more than one session is online.
+  (live sessions, all agents) and `sessions_live: [{agent, session, label, since, last_poll, on_duty}]`
+  (duty first, then oldest first); `/api/state` → `agent.duty` + `agent.sessions` + `agent.sessions_live`.
+  The panel header shows „<duty label> — მორიგე სესია (2 ხაზზე)" when more than one session is online.
 - A poll **without** `session` is session `""` — one more session, nothing special (old pollers keep working).
 - Two different agents at once (kiki + codex): one duty globally, first come (v1).
 - Not on duty → stand down: heartbeat only, don't act on the log; log event `duty` (`data: {agent, session,
@@ -107,12 +115,13 @@ that lost non-text items is named as `labels[]`). Read it — a dropped field me
 proposal lost information. `read` is a sentence of text, not `true`.
 
 ## 2. Read what the user sent — `GET /api/agent_queue`
-Query: `agent=<name>` · `session=<id>` (see Duty session) · `status=queued|waiting|done|all` (default = not done) · `since=<ISO>`
+Query: `agent=<name>` · `session=<id>` · `label=<one line, max 80>` (see Duty session) · `status=queued|waiting|done|all` (default = not done) · `since=<ISO>`
 (log entries after that moment) · `limit=<n>` (log rows; default 500 with `since`, 100 without; max 2000).
 ```json
 { "ok": true, "server_time": "…",
   "agent": { "connected": true, "known": true, "busy": true, "name": "kiki", "last_seen": "…", "last_analysis": "…", "open_batches": ["b89710d261fb"], "queued": 2, "duty": { "agent": "kiki", "session": "…", "since": "…" }, "sessions": 2 },
   "session": "…", "on_duty": true, "duty": { "agent": "kiki", "session": "…", "since": "…" }, "sessions": 2,
+  "sessions_live": [ { "agent": "kiki", "session": "…", "label": "კიკი · triage · a1b2c3d4", "since": "…", "last_poll": "…", "on_duty": true } ],
   "queue": [ { "id": 1, "batch_id": "b89…", "task_id": "…", "tab": "triage|active", "status": "queued",
                "created_at": "…", "item": { "task_id": "…", "action": "split|null", "flag": true, "proposal": {…}, "changes": {…}|null, "decision": "…", "comment": "…"|null } } ],
   // tab "active" item = the same shape without `proposal`: { task_id, action, flag, decision, comment, changes:{due, due_string}|null }
@@ -145,7 +154,7 @@ Every task carries `agent_status`, `agent_proposal` (object or null), `agent_dec
 `agent_decision` (object or null — the panel's own undo recipe `{kind, changes, recipe}`; the
 recipe holds the old values, i.e. the snapshot before the accept), `postpone_count` (from the
 Todoist label `(+n)`); the response has a global
-`agent: {connected, known, busy, name, last_seen, last_analysis, open_batches, queued, round_closed_at, duty, sessions, last_write, pending_deletes}`.
+`agent: {connected, known, busy, name, last_seen, last_analysis, open_batches, queued, round_closed_at, duty, sessions, sessions_live, last_write, pending_deletes}`.
 - `pending_deletes` = tasks the user marked „წაშალე" on the panel: they are **not** in `tasks`
   (hidden from every app view) and not yet deleted on Todoist; the real delete runs when the
   round closes. Do not propose for them; do not touch them.

@@ -164,9 +164,12 @@ function agentRenderHeader(){
       const la = agentInfo.last_analysis ? tr("agent.sub_last", {time: agentInfo.last_analysis.slice(11, 16)}) : tr("agent.sub_never");
       let conn = agentInfo.connected ? tr("agent.connection_on") : tr("agent.connection_off");
       const duty = agentInfo.duty || null;
+      const live = agentInfo.sessions_live || [];
       if(agentInfo.connected && (agentInfo.sessions || 0) > 1){
-        // several sessions of the agent are polling → say which one is on duty (receives queue + trigger)
-        conn = tr("agent.duty_sessions", {name: (duty && duty.agent) || agentInfo.name || "", n: agentInfo.sessions});
+        // several sessions of the agent are polling → say which one is on duty (receives queue + trigger).
+        // Its own label when it sent one: Lasha needs to see WHICH window, not just how many are online.
+        const on = live.find(s => s.on_duty);
+        conn = tr("agent.duty_sessions", {name: (on && agentSessionName(on)) || (duty && duty.agent) || agentInfo.name || "", n: agentInfo.sessions});
       }
       const tip = (agentInfo.name || "") + (duty && duty.session ? " · " + duty.session.slice(0, 8) : "");
       // audit line (Package B): the last write that came in with an agent key
@@ -174,7 +177,12 @@ function agentRenderHeader(){
       const lwHtml = lw && lw.agent
         ? ` · <span class="kp-lw" title="${esc(lw.text || lw.id || "")}">${esc(tr("agent.last_write", {name: lw.agent, time: (lw.at || "").slice(11, 16), what: lw.path || ""}))}</span>`
         : "";
-      sub.innerHTML = `${esc(la)} · <span class="kp-dot ${agentInfo.connected ? "" : "off"}" title="${esc(tip)}"></span> ${esc(conn)}${lwHtml}`;
+      // the connection part is the door to the session picker (who is on duty) — Lasha, 2026-08-21
+      const dotConn = `<span class="kp-dot ${agentInfo.connected ? "" : "off"}"></span> ${esc(conn)}`;
+      sub.innerHTML = `${esc(la)} · ` + (live.length
+        ? `<span class="kp-duty" role="button" tabindex="0" title="${esc(tip ? tip + " — " + tr("agent.sessions_hint") : tr("agent.sessions_hint"))}"`
+          + ` onclick="agentSessionsDialog()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();agentSessionsDialog();}">${dotConn}</span>`
+        : `<span title="${esc(tip)}">${dotConn}</span>`) + lwHtml;
     }
   }
   if(btn){
@@ -183,6 +191,49 @@ function agentRenderHeader(){
   }
   const kb = document.getElementById("agent-keys-btn");
   if(kb) kb.style.display = on ? "" : "none";
+}
+
+/* ---- session picker: which window is on duty (2026-08-21, Kiki's letter №3, Lasha's yes) ----
+   Several sessions of one agent poll at once; only the duty one receives the queue. Until now the
+   header said "2 online" and nothing more — Lasha could not tell which window it was, nor pick one.
+   The list shows every live session by its own label (`label=` on the poll) and hands the duty
+   lease to the one he picks (POST /api/agent_take — the endpoint already existed). ---- */
+let _agentSessList = [];                       // snapshot the open dialog acts on (indexes are stable)
+function _agentHM(iso){ return (iso || "").slice(11, 16); }
+function agentSessionName(s){
+  // the label is the agent's own line ("persona · folder · id"); no label → name + short id
+  if(s && s.label) return s.label;
+  const id = (s && s.session || "").slice(0, 8);
+  return ((s && s.agent) || tr("agent.sessions_unnamed")) + (id ? " · " + id : "");
+}
+function agentSessionsDialog(){
+  _agentSessList = (agentInfo.sessions_live || []).slice();     // duty first (the server sorts)
+  const rows = _agentSessList.map((s, i) => `
+    <div class="kp-sess-row ${s.on_duty ? "duty" : ""}">
+      <span class="txt" title="${esc((s.agent || "") + (s.session ? " · " + s.session : ""))}">
+        <span class="nm">${esc(agentSessionName(s))}</span>
+        <span class="tm">${esc(tr("agent.sessions_when", {since: _agentHM(s.since), poll: _agentHM(s.last_poll)}))}</span>
+      </span>
+      ${s.on_duty
+        ? `<span class="dt">${esc(tr("agent.sessions_on_duty"))}</span>`
+        : `<button class="pd-btn small" onclick="agentSessionTake(${i})">${esc(tr("agent.sessions_take"))}</button>`}
+    </div>`).join("");
+  _openDialog(`
+    <div class="pd-head">${esc(tr("agent.sessions_title"))}</div>
+    <div class="pd-body">
+      <p class="pd-msg">${esc(tr("agent.sessions_body"))}</p>
+      <div class="kp-sess">${rows || `<p class="pd-note">${esc(tr("agent.sessions_empty"))}</p>`}</div>
+      <p class="pd-note">${esc(tr("agent.sessions_note"))}</p>
+    </div>
+    <div class="pd-foot"><button class="pd-btn cancel" onclick="_resolveConfirm(false)">${esc(tr("common.close"))}</button></div>`);
+}
+async function agentSessionTake(i){
+  const s = _agentSessList[i];
+  if(!s || s.on_duty) return;
+  try { await post("/api/agent_take", {agent: s.agent, session: s.session}); }   // post() toasts its own error
+  catch(_){ return; }
+  showToast(tr("agent.sessions_taken", {name: agentSessionName(s)}), "ok", 4000);
+  agentSessionsDialog();                        // redraw with the new duty marked (agentInfo is fresh)
 }
 
 /* ---- access keys dialog (Package B, apikeys.py): who may talk to this Todoister ---- */

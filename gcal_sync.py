@@ -16,6 +16,24 @@ import gcal_api
 from store import _lock, db, get_setting, set_setting, log_action, now, split_due
 
 
+def _err(e):
+    """Google puts the real reason in the response body; HTTPError's str() is
+    just "HTTP Error 400: Bad Request", which is undiagnosable in a log. Read
+    the body once and append it (trimmed — a stack of these must not flood
+    app.log). Never raises: diagnostics must not break the sync pass."""
+    if not isinstance(e, urllib.error.HTTPError):
+        return str(e)
+    try:
+        body = e.read().decode("utf-8", "replace").strip()
+    except Exception:
+        body = ""
+    try:                                   # {"error": {"message": "..."}}
+        msg = json.loads(body)["error"]["message"]
+    except Exception:
+        msg = body[:400]
+    return f"{e} — {msg}" if msg else str(e)
+
+
 def gcal_access_token(conn):
     """Valid access token for the Calendar API, refreshing when stale.
     Returns None when full sync is not authorized."""
@@ -69,7 +87,13 @@ def gcal_event_payload(row, date_s, time_s):
         reminders = {"useDefault": False, "overrides": [
             {"method": "popup", "minutes": m} for m in GCAL_DOUBLE_MINUTES]}
     else:
-        reminders = {"useDefault": True}
+        # ❗ The empty list is load-bearing. We PATCH, so anything we leave out
+        # keeps its old value — and an event that was P1/P2 when it was created
+        # already carries our two overrides. Sending {"useDefault": True} alone
+        # merges into "default reminders AND overrides", which Google rejects
+        # with a 400, the signature is never stored, and the task retries every
+        # 30 s for ever. The empty list is how you clear them.
+        reminders = {"useDefault": True, "overrides": []}
     return {
         "summary": row["content"],
         "description": row["description"] or "",
@@ -134,7 +158,7 @@ def gcal_reconcile():
                     gcal_api.delete_event(token, eid)
                     done_del.append(tid)
                 except Exception as e:
-                    log_action(f"[{now()}] gcal event delete failed ({tid}): {e}")
+                    log_action(f"[{now()}] gcal event delete failed ({tid}): {_err(e)}")
             for tid, eid, payload, sig in ops_upsert:
                 try:
                     if eid:
@@ -150,7 +174,7 @@ def gcal_reconcile():
                     if eid:
                         done_upsert.append((tid, eid, sig))
                 except Exception as e:
-                    log_action(f"[{now()}] gcal event push failed ({tid}): {e}")
+                    log_action(f"[{now()}] gcal event push failed ({tid}): {_err(e)}")
             if not done_del and not done_upsert:
                 return
             with _lock:

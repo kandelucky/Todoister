@@ -694,5 +694,26 @@
   "agent.verdict_postponed": "Postponed: {when} · @(+{n})",
 
   "buddy.lvl": "lvl",
-  "buddy.name_placeholder": "Vasiko"
+  "buddy.name_placeholder": "Vasiko",
+  "buddy.egg_name": "Egg",
+  "buddy.title": "Buddy",
+  "buddy.life": "Life",
+  "buddy.bond": "Bond",
+  "buddy.food": "Food",
+  "buddy.fun": "Fun",
+  "buddy.energy": "Energy",
+  "buddy.close": "Close",
+  "buddy.phase_info": "Phase",
+  "buddy.xp_details": "Donek balance",
+  "buddy.cost": "-{xp} XP, +{gain} {stat}",
+  "buddy.to_next": "{n} XP to phase {stage}",
+
+  "buddy.hey_hungry": "Hungry",
+  "buddy.hey_tired": "Tired",
+  "buddy.hey_sad": "Sad",
+  "buddy.hey_sleep": "ZzZ",
+  "buddy.hey_eat": "Nom!",
+  "buddy.hey_level": "Level!",
+  "buddy.hey_dead": "RIP",
+  "buddy.open": "Open Buddy"
 }

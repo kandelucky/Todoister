@@ -81,7 +81,7 @@
   }
   .buddy-scene{
     position:relative; flex-shrink:0; width:63px; height:63px;
-    background-image:url('/assets/buddy-dragon.png');
+    background-image:var(--sprite-sheet, url('/assets/buddy-dragon.png'));  /* set by js/15-buddy-creatures.js */
     background-size:800% 1400%;
     background-position:28.571% 92.308%;      /* mini cave background: row 12, col 2 */
     background-repeat:no-repeat; image-rendering:pixelated;
@@ -89,7 +89,7 @@
   }
   .buddy-dragon{
     position:absolute; inset:0;
-    background-image:url('/assets/buddy-dragon.png');
+    background-image:var(--sprite-sheet, url('/assets/buddy-dragon.png'));  /* set by js/15-buddy-creatures.js */
     background-size:800% 1400%;
     background-position:28.571% 46.154%;      /* stage 8, idle_happy */
     background-repeat:no-repeat; image-rendering:pixelated;
@@ -121,6 +121,134 @@
     display:flex; align-items:center; justify-content:center; color:var(--text);
   }
   .buddy-ring svg{width:15px; height:15px;}
+  /* frozen (vacation) and dead states — set by js/16-buddy.js */
+  .buddy-strip.vacation{filter:grayscale(1);}
+  .buddy-strip.dead{filter:grayscale(1); opacity:0.55;}
+  /* ill — a stat under 25. The warning is the picture itself: for this user
+     seeing the creature go grey lands harder than any number would, and it
+     costs nothing but a filter. The cave dims with it. */
+  .buddy-strip.sick .buddy-dragon{filter:grayscale(0.85) brightness(0.8);}
+  .buddy-strip.sick .buddy-scene{filter:brightness(0.75);}
+  /* HEY — the signal borrows the name's line (js/16-buddy.js heySignal).
+     `hey` = wants you now (accent + a slow pulse), `hey calm` = just news. */
+  .buddy-name.hey{color:var(--accent); font-weight:800; animation:buddy-hey 1.6s ease-in-out infinite;}
+  .buddy-name.hey.calm{color:var(--text-3); font-weight:700; animation:none;}
+  @keyframes buddy-hey{0%,100%{opacity:1;} 50%{opacity:.45;}}
+  .bw-scene.sick{filter:brightness(0.8);}
+  .bw-scene.sick .bw-sprite{filter:grayscale(0.85);}
+  .buddy-strip{cursor:pointer;}
+  .buddy-strip:hover{border-color:var(--text-3);}
+
+  /* ---- Buddy window (js/17-buddy-window.js) ----
+     The playground draws this scene in its own palette; here it is rebuilt on
+     Todoister's tokens — same geometry, app colours. Only the sprite sheet and
+     the cave keep their own pixels. */
+  .bw-backdrop{
+    position:fixed; inset:0; z-index:300; display:none;
+    background:rgba(0,0,0,0.55);
+    align-items:center; justify-content:center;
+  }
+  .bw-backdrop.on{display:flex;}
+  .bw-window{
+    width:360px; max-height:92vh; overflow:auto;
+    background:var(--card); border:1px solid var(--border); border-radius:8px;
+    padding:14px; display:flex; flex-direction:column; gap:12px;
+  }
+  /* --- top bar: level ring, XP, name, close --- */
+  .bw-top{display:flex; align-items:center; gap:10px;}
+  .bw-cluster{
+    display:flex; align-items:center; gap:8px;
+    padding:4px 8px 4px 4px; background:var(--bg);
+    border:1px solid var(--border); border-radius:999px;
+  }
+  .bw-ring{position:relative; width:38px; height:38px; flex-shrink:0; padding:0;}
+  .bw-ring svg{width:38px; height:38px; transform:rotate(-90deg);}
+  .bw-ring circle{fill:none; stroke-width:4;}
+  .bw-ring-track{stroke:var(--hover);}
+  .bw-ring-prog{
+    stroke:var(--today); stroke-linecap:round;
+    stroke-dasharray:150.8;                 /* 2πr, r=24 */
+    stroke-dashoffset:150.8;                /* set by js */
+    transition:stroke-dashoffset .3s;
+  }
+  .bw-lvl{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-family:Consolas,monospace; font-size:14px; font-weight:800; color:#9c7b4d;
+  }
+  .bw-div{width:1px; height:20px; background:var(--border);}
+  .bw-xp{display:flex; align-items:baseline; gap:5px; font-family:Consolas,monospace;}
+  .bw-xp b{font-size:15px; color:var(--text);}
+  .bw-name{
+    flex:1; text-align:center; font-size:15px; font-weight:700; color:var(--text);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .bw-close{
+    flex-shrink:0; width:28px; height:28px; border-radius:6px; color:var(--text-2);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .bw-close:hover{background:var(--hover); color:var(--text);}
+  .bw-close svg{width:16px; height:16px;}
+  /* --- the cave scene ---
+     Geometry copied from the playground: the cave is the sheet's 2×2 cell block
+     (rows 12-13, cols 0-1) and the sprite stands on its floor line. */
+  .bw-scene{
+    position:relative; width:100%; aspect-ratio:1;
+    background-image:var(--sprite-sheet, url('/assets/buddy-dragon.png'));
+    background-size:400% 700%; background-position:0% 100%;
+    background-repeat:no-repeat; image-rendering:pixelated;
+    border:1px solid var(--border); border-radius:var(--r); overflow:hidden;
+  }
+  .bw-scale{
+    position:absolute; left:50%; bottom:10.3%;
+    width:25.6%; height:25.6%; margin-left:-12.8%;
+    transform-origin:50% 85.71%;            /* the sprite's feet, not its middle */
+    --bw-dragon-scale:1;
+    transform:scale(var(--bw-dragon-scale));
+    transition:transform .3s;
+  }
+  .bw-sprite{
+    width:100%; height:100%;
+    background-image:var(--sprite-sheet, url('/assets/buddy-dragon.png'));
+    background-size:800% 1400%; background-repeat:no-repeat; image-rendering:pixelated;
+  }
+  .bw-zzz{
+    position:absolute; top:-6%; left:74%; display:none;
+    font-family:Consolas,monospace; font-weight:800; color:var(--text-2);
+  }
+  .bw-zzz.on{display:block;}
+  .bw-zzz span{display:inline-block; animation:bw-float 2.4s infinite ease-in-out;}
+  .bw-zzz span:nth-child(1){font-size:11px;}
+  .bw-zzz span:nth-child(2){font-size:14px; animation-delay:.35s;}
+  .bw-zzz span:nth-child(3){font-size:17px; animation-delay:.7s;}
+  @keyframes bw-float{0%{opacity:0; transform:translateY(4px);} 35%{opacity:1;} 100%{opacity:0; transform:translateY(-12px);}}
+  .bw-to-next{
+    text-align:center; font-size:12px; color:var(--text-3);
+    font-variant-numeric:tabular-nums; margin-top:-4px;
+  }
+  /* --- life strip + the three stat/care buttons --- */
+  .bw-life{display:flex; flex-direction:column; gap:5px;}
+  .bw-life-head{display:flex; justify-content:space-between; font-size:13px; color:var(--text-2);}
+  .bw-pct{font-family:Consolas,monospace; font-size:12px; color:var(--text-2);}
+  .bw-segs{display:flex; gap:3px;}
+  .bw-segs .seg{
+    flex:1; height:6px; border-radius:2px; background:var(--hover);
+  }
+  .bw-segs .seg.on{background:var(--today);}
+  .bw-segs.mid .seg.on{background:var(--p2);}
+  .bw-segs.bad .seg.on{background:var(--accent);}
+  .bw-stats{display:flex; flex-direction:column; gap:8px;}
+  .bw-stat{
+    display:flex; flex-direction:column; gap:5px;
+    padding:8px 10px; border:1px solid var(--border); border-radius:var(--r);
+    background:var(--bg); width:100%;
+  }
+  .bw-stat:hover{background:var(--hover);}
+  .bw-stat.blocked{opacity:0.45; cursor:default;}
+  .bw-stat.blocked:hover{background:var(--bg);}
+  .bw-stat-head{display:flex; align-items:center; justify-content:space-between; gap:8px;}
+  .bw-stat-l{display:flex; align-items:center; gap:7px; font-size:13px; color:var(--text);}
+  .bw-stat-l svg{width:15px; height:15px; color:var(--text-2);}
+  .bw-cost{font-size:11px; color:var(--text-3); font-variant-numeric:tabular-nums;}
   .buddy-strip + .sidebar-help{margin-top:0;}   /* the strip takes the free space now */
   #app-sidebar-container.disconnected .buddy-strip{
     opacity:0.38; pointer-events:none; filter:grayscale(1);

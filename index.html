@@ -95,7 +95,9 @@
   </div>
   <ul id="projects_list"></ul>
 
-  <!-- Buddy micro strip: appearance only for now (fixed values, no engine, no click) -->
+  <!-- Buddy micro strip. The values below are only what shows before
+       js/16-buddy.js paints the real state over them. The rings report only;
+       a click anywhere on the strip opens the Buddy window (js/17). -->
   <div class="buddy-strip" id="buddy-strip">
     <div class="buddy-scene"><div class="buddy-dragon"></div></div>
     <div class="buddy-right">
@@ -103,10 +105,13 @@
         <span class="buddy-name" data-i18n="buddy.name_placeholder">Buddy</span>
         <span class="buddy-lv"><span data-i18n="buddy.lvl">lvl</span> <b>8</b></span>
       </div>
+      <!-- the rings report the three stats, so they wear the stat icons
+           (fork / face / lightning) the full Buddy window uses, not the care
+           actions' bowl / face / moon, which would read as buttons -->
       <div class="buddy-rings">
-        <span class="buddy-ring" style="--p:82"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16a8 8 0 0 1-16 0Z"/><path d="M9 7c0-1 .4-1.8 1-2.4"/><path d="M13 7c0-1 .4-1.8 1-2.4"/></svg></i></span>
-        <span class="buddy-ring" style="--p:74"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14a4.5 4.5 0 0 0 8 0"/><circle cx="9" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1.1" fill="currentColor" stroke="none"/></svg></i></span>
-        <span class="buddy-ring" style="--p:66"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg></i></span>
+        <span class="buddy-ring" style="--p:82"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg></i></span>
+        <span class="buddy-ring" style="--p:74"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg></i></span>
+        <span class="buddy-ring" style="--p:66"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></i></span>
       </div>
     </div>
   </div>
@@ -199,6 +204,87 @@
   <div class="proj-dialog" id="confirm-dialog"></div>
 </div>
 
+<!-- ============ BUDDY WINDOW ============
+     Ported from the standalone playground (Desktop/Tamagotchi/buddy-todoister.html)
+     into the app, in Todoister's own palette and tokens. Filled by js/17-buddy-window.js.
+     Still to come from the playground: celebrations, gold piles, speech bubble,
+     settings/help, rename, vacation, death/revive. -->
+<div class="bw-backdrop" id="bw-backdrop" onclick="if(event.target===this) closeBuddyWindow()">
+  <div class="bw-window" role="dialog" aria-modal="true">
+
+    <div class="bw-top">
+      <div class="bw-cluster">
+        <!-- level ring: the arc fills with progress towards the next phase -->
+        <button class="bw-ring" id="bw-ring" data-i18n-title="buddy.phase_info" title="Phase">
+          <svg viewBox="0 0 52 52">
+            <circle class="bw-ring-track" cx="26" cy="26" r="24"></circle>
+            <circle class="bw-ring-prog" id="bw-ring-prog" cx="26" cy="26" r="24"></circle>
+          </svg>
+          <span class="bw-lvl" id="bw-lvl">1</span>
+        </button>
+        <span class="bw-div"></span>
+        <!-- XP balance. The earning multiplier that used to sit here is gone:
+             the pet's condition no longer changes what a finished task pays. -->
+        <span class="bw-xp" id="bw-xp-wrap" data-i18n-title="buddy.xp_details" title="Donek balance">
+          <b id="bw-xp">0</b>
+        </span>
+      </div>
+      <span class="bw-name" id="bw-name">Buddy</span>
+      <button class="bw-close" onclick="closeBuddyWindow()" data-i18n-title="buddy.close" title="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- cave scene: the background is the sheet's cave cells, the sprite sits on its floor -->
+    <div class="bw-scene" id="bw-scene">
+      <div class="bw-scale" id="bw-scale">
+        <div class="bw-sprite" id="bw-sprite"></div>
+        <div class="bw-zzz" id="bw-zzz"><span>Z</span><span>Z</span><span>Z</span></div>
+      </div>
+    </div>
+
+    <div class="bw-to-next" id="bw-to-next"></div>
+
+    <!-- life = the average of the three stats; drives XP income and the growth gate -->
+    <div class="bw-life">
+      <div class="bw-life-head">
+        <span data-i18n="buddy.life">Life</span>
+        <span class="bw-pct" id="bw-life-v">100%</span>
+      </div>
+      <div class="bw-segs" id="bw-life-segs"></div>
+    </div>
+
+    <!-- the three stats are also the care buttons -->
+    <div class="bw-stats">
+      <button class="bw-stat" id="bw-btn-food" onclick="Buddy.care('food')">
+        <span class="bw-stat-head">
+          <span class="bw-stat-l"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg><span data-i18n="buddy.food">Food</span></span>
+          <span class="bw-pct" id="bw-food-v">100%</span>
+        </span>
+        <span class="bw-segs" id="bw-food-segs"></span>
+        <span class="bw-cost" id="bw-food-cost"></span>
+      </button>
+      <button class="bw-stat" id="bw-btn-happy" onclick="Buddy.care('happy')">
+        <span class="bw-stat-head">
+          <span class="bw-stat-l"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg><span data-i18n="buddy.fun">Fun</span></span>
+          <span class="bw-pct" id="bw-happy-v">100%</span>
+        </span>
+        <span class="bw-segs" id="bw-happy-segs"></span>
+        <span class="bw-cost" id="bw-happy-cost"></span>
+      </button>
+      <button class="bw-stat" id="bw-btn-energy" onclick="Buddy.care('energy')">
+        <span class="bw-stat-head">
+          <span class="bw-stat-l"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg><span data-i18n="buddy.energy">Energy</span></span>
+          <span class="bw-pct" id="bw-energy-v">100%</span>
+        </span>
+        <span class="bw-segs" id="bw-energy-segs"></span>
+        <span class="bw-cost" id="bw-energy-cost"></span>
+      </button>
+    </div>
+
+  </div>
+</div>
+
 <!-- ============ GUIDE OVERLAY ============ -->
 <div class="guide-overlay" id="guide-overlay" onclick="if(event.target===this) closeGuide()">
   <div class="guide-box">
@@ -247,6 +333,10 @@
 <script src="js/12-reporting-palette.js"></script>
 <script src="js/13-poll.js"></script>
 <script src="js/14-agent.js"></script>
+<!-- Buddy: the creature layer first (it registers window.CREATURES), engine second -->
+<script src="js/15-buddy-creatures.js"></script>
+<script src="js/16-buddy.js"></script>
+<script src="js/17-buddy-window.js"></script>
 <script src="notebook-assets/bundle.js"></script>
 </body>
 </html>

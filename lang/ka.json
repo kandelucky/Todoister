@@ -694,5 +694,26 @@
   "agent.verdict_postponed": "გადაიდო: {when} · @(+{n})",
 
   "buddy.lvl": "დონე",
-  "buddy.name_placeholder": "ვასიკო"
+  "buddy.name_placeholder": "ვასიკო",
+  "buddy.egg_name": "კვერცხი",
+  "buddy.title": "მეგობარი",
+  "buddy.life": "სიცოცხლე",
+  "buddy.bond": "კავშირი",
+  "buddy.food": "საკვები",
+  "buddy.fun": "სიხალისე",
+  "buddy.energy": "ენერგია",
+  "buddy.close": "დახურვა",
+  "buddy.phase_info": "ფაზა",
+  "buddy.xp_details": "დონეკის ბალანსი",
+  "buddy.cost": "-{xp} XP, +{gain} {stat}",
+  "buddy.to_next": "ფაზა {stage}-მდე: {n} XP",
+
+  "buddy.hey_hungry": "მშია",
+  "buddy.hey_tired": "დაღლილი",
+  "buddy.hey_sad": "მოწყენილი",
+  "buddy.hey_sleep": "ZzZ",
+  "buddy.hey_eat": "ნამ!",
+  "buddy.hey_level": "დონე!",
+  "buddy.hey_dead": "RIP",
+  "buddy.open": "მეგობრის გახსნა"
 }

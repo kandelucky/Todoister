@@ -287,8 +287,24 @@ function completeTask(id){
       ? tr("toast.done_repeats", {when: repeatLabel(t.due_string)}) : "";
     showToast({title: tr("toast.done_title"), sub}, null, 4000,
       {label: tr("undo.undo_btn"), fn: doUndoMain});
+    // Buddy earns from finished work — the only XP source in the app.
+    // Flat base, plus a bonus when the task was closed by its due date. The
+    // priority link is gone on purpose: P1 pays the *label*, and Lasha sets
+    // that label himself, so a paid priority slowly stops meaning "urgent" —
+    // a data-quality problem, since the agent panel triages by priority. A due
+    // date closed on time is the behaviour this app exists to produce, so here
+    // the shortcut and the goal are the same act and it needs no defence.
+    // ❗ Base + bonus, never a penalty. Late must not pay less than fresh —
+    // closing an overdue task is the hardest thing this app asks for. Undated
+    // must not pay less either, or Inbox capture turns into compulsory dating.
+    // ❗ Un-completing does NOT take the XP back: an undo should not punish.
+    if (window.Buddy) window.Buddy.addXP(BUDDY_XP_BASE + (buddyOnTime(t) ? BUDDY_XP_ON_TIME : 0));
   }
 }
+const BUDDY_XP_BASE = 20;      // every finished task, whatever it is
+const BUDDY_XP_ON_TIME = 10;   // ...and this on top when its date had not passed
+// Undated tasks are not "on time" — they simply take the base, no penalty.
+function buddyOnTime(t){ return !!t.due_date && !isOverdue(t.due_date); }
 function toggleLabel(id, lbl){
   const t = T(id); const arr = [...(t.chosen_labels||[])];
   const i = arr.indexOf(lbl);
